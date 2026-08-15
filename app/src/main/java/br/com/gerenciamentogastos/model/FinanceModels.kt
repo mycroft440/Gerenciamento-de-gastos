@@ -8,7 +8,7 @@ enum class TransactionType {
 }
 
 enum class Category(val label: String, val symbol: String) {
-    RENDA("Renda", "R$"),
+    RENDA("Renda", "R\$"),
     ALIMENTACAO("Alimentação", "A"),
     TRANSPORTE("Transporte", "T"),
     MORADIA("Moradia", "M"),
