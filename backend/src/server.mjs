@@ -102,6 +102,7 @@ const server = http.createServer(async (req, res) => {
         linkId: statusLinkId,
         accountsReady: Boolean(state.accountsReady),
         transactionsReady: Boolean(state.transactionsReady),
+        deletionPending: Boolean(state.deletionPending),
         lastWebhookAt: state.lastWebhookAt ?? null,
       });
     }
@@ -124,9 +125,14 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "DELETE" && deleteMatch) {
       if (!requireSession(req, res)) return;
       const linkId = decodeURIComponent(deleteMatch[1]);
-      await belvo.deleteLink(linkId);
-      linkReadiness.delete(linkId);
-      return json(res, 200, { deleted: true });
+      const deletion = await belvo.deleteLink(linkId);
+      const current = linkReadiness.get(linkId) ?? {};
+      current.deletionPending = true;
+      linkReadiness.set(linkId, current);
+      return json(res, 202, {
+        deletionRequested: true,
+        requestId: deletion?.request_id ?? null,
+      });
     }
 
     const webhookMatch = url.pathname.match(/^\/webhooks\/belvo\/([^/]+)$/);
@@ -137,14 +143,19 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
       const linkId = String(body.link_id ?? "");
       const webhookType = String(body.webhook_type ?? "").toUpperCase();
+      const webhookCode = String(body.webhook_code ?? "");
       if (linkId) {
-        const current = linkReadiness.get(linkId) ?? {};
-        if (body.webhook_code === "historical_update") {
-          if (webhookType === "ACCOUNTS") current.accountsReady = true;
-          if (webhookType === "TRANSACTIONS") current.transactionsReady = true;
+        if (webhookCode === "link_deleted") {
+          linkReadiness.delete(linkId);
+        } else {
+          const current = linkReadiness.get(linkId) ?? {};
+          if (webhookCode === "historical_update") {
+            if (webhookType === "ACCOUNTS") current.accountsReady = true;
+            if (webhookType === "TRANSACTIONS") current.transactionsReady = true;
+          }
+          current.lastWebhookAt = new Date().toISOString();
+          linkReadiness.set(linkId, current);
         }
-        current.lastWebhookAt = new Date().toISOString();
-        linkReadiness.set(linkId, current);
       }
       return json(res, 202, { accepted: true });
     }
