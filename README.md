@@ -25,8 +25,10 @@ O aplicativo já contém:
 - AGP 9.3.0
 - Gradle 9.5.0
 - JDK 17
-- compileSdk / targetSdk 37
-- Compose BOM 2026.08.00
+- compileSdk / targetSdk 36
+- Compose BOM 2026.06.00
+
+O SDK 36 foi escolhido para o CI porque está disponível no ambiente atual do GitHub Actions. A camada de UI usa a BOM estável do Compose 2026.06.00.
 
 ## Arquitetura inicial
 
@@ -47,7 +49,7 @@ A camada `OpenFinanceGateway` existe para evitar acoplar a interface do aplicati
 
 ## Build
 
-O projeto foi preparado para compilar pelo GitHub Actions. O workflow instala o SDK Android necessário, executa testes e gera `app-debug.apk` como artefato.
+O projeto foi preparado para compilar pelo GitHub Actions. O workflow instala o SDK Android necessário, executa os testes unitários e gera `app-debug.apk` como artefato.
 
 Workflow: `.github/workflows/android.yml`
 
