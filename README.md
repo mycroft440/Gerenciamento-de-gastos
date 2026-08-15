@@ -1,26 +1,33 @@
 # Gerenciamento de Gastos
 
-MVP Android nativo para consolidar entradas e saídas, categorizar transações e preparar a conexão futura com instituições financeiras via Open Finance.
+Aplicativo Android nativo para consolidar receitas e despesas e conectar contas bancárias pelo Open Finance brasileiro.
 
 ## Estado atual
 
-O aplicativo já contém:
+O projeto já contém:
 
-- painel mensal com saldo, entradas e saídas;
+- painel com saldo, entradas e saídas;
 - gastos agrupados automaticamente por categoria;
 - pesquisa de transações;
-- origem da transação (banco/conta);
-- tela de contas com simulação de conexão;
-- classificador simples por palavras-chave;
-- contrato `OpenFinanceGateway` para substituir a fonte demo por um agregador real;
-- teste unitário do classificador;
-- GitHub Actions para testar e gerar APK debug.
+- modo demonstrativo para desenvolvimento sem credenciais;
+- integração real preparada com Belvo OFDA (Open Finance Brasil);
+- Hosted Widget para consentimento bancário;
+- retorno por deep link e armazenamento local do `link.id`;
+- backend próprio para proteger as credenciais Belvo;
+- autenticação de curta duração entre app e backend;
+- webhook para aguardar a carga histórica antes de buscar movimentações;
+- importação das transações reais para o painel;
+- desconexão/revogação do link;
+- testes Android e backend no GitHub Actions;
+- Dockerfile para hospedar o backend.
 
-> **Importante:** a versão atual usa somente dados de demonstração. Não solicita senha bancária, não armazena credenciais e não faz conexão real com bancos.
+> O código do fluxo real está implementado, mas a conexão com um banco só é ativada depois de configurar credenciais Belvo, URLs públicas de termos/logo, webhook e uma URL HTTPS para o backend. Veja `OPEN_FINANCE_SETUP.md`.
 
 ## Stack
 
-- Kotlin / Android nativo
+### Android
+
+- Kotlin
 - Jetpack Compose + Material 3
 - AGP 9.3.0
 - Gradle 9.5.0
@@ -28,40 +35,70 @@ O aplicativo já contém:
 - compileSdk / targetSdk 36
 - Compose BOM 2026.06.00
 
-O SDK 36 foi escolhido para o CI porque está disponível no ambiente atual do GitHub Actions. A camada de UI usa a BOM estável do Compose 2026.06.00.
+### Backend
 
-## Arquitetura inicial
+- Node.js 22
+- APIs HTTP nativas do Node, sem framework ou dependências npm de produção
+- Container Docker
+- Belvo Open Finance Data Aggregation (OFDA) Brasil
+
+## Arquitetura
 
 ```text
-UI (Compose)
+Android
   ├── Resumo
   ├── Transações
-  └── Contas
-       ↓
-FinanceRepository
-       ↓
-OpenFinanceGateway
-       ├── DemoOpenFinanceGateway (agora)
-       └── Provedor/agregador Open Finance (futuro)
+  └── Contas / Hosted Widget
+             │
+             ▼
+     Backend HTTPS próprio
+       ├── sessão curta do app
+       ├── criação do Widget Access Token
+       ├── contas/transações
+       └── webhook histórico
+             │
+             ▼
+        Belvo OFDA Brasil
+             │
+             ▼
+      Instituição financeira
 ```
 
-A camada `OpenFinanceGateway` existe para evitar acoplar a interface do aplicativo a um provedor específico. Quando o agregador for escolhido, a implementação demo poderá ser trocada pela implementação real sem reescrever as telas.
+As credenciais `BELVO_SECRET_ID` e `BELVO_SECRET_PASSWORD` nunca ficam no APK. O celular recebe apenas a URL temporária do Hosted Widget e, após o consentimento, o identificador da conexão (`link.id`).
 
 ## Build
 
-O projeto foi preparado para compilar pelo GitHub Actions. O workflow instala o SDK Android necessário, executa os testes unitários e gera `app-debug.apk` como artefato.
+O workflow `.github/workflows/android.yml` executa em paralelo:
 
-Workflow: `.github/workflows/android.yml`
+- testes do backend no Node 22;
+- testes Android;
+- compilação do APK debug;
+- upload do APK como artefato do GitHub Actions.
+
+Para gerar um APK que realmente converse com o backend:
+
+```bash
+gradle test :app:assembleDebug -PBACKEND_BASE_URL=https://api.seu-dominio.com
+```
+
+Sem `BACKEND_BASE_URL`, o APK continua compilável e o modo de demonstração permanece disponível.
+
+## Configuração do Open Finance
+
+Siga `OPEN_FINANCE_SETUP.md` para:
+
+1. obter as credenciais Belvo;
+2. configurar sandbox/produção;
+3. publicar termos, ícone e logo;
+4. hospedar o backend em HTTPS;
+5. cadastrar o webhook;
+6. apontar o APK para o backend.
 
 ## Próximas etapas
 
-1. Escolher o agregador/provedor de Open Finance.
-2. Criar backend seguro para OAuth/consentimento e tokens.
-3. Persistir contas e transações localmente.
-4. Sincronizar transações reais.
-5. Melhorar regras de categorização e permitir correção manual.
-6. Adicionar orçamento, metas, recorrências e alertas.
-
-## Segurança
-
-Nunca colocar segredo de API, certificado, token ou senha bancária dentro do APK. Credenciais de servidor devem ficar no backend/secret manager. O aplicativo cliente deve receber apenas os dados e tokens estritamente necessários para o fluxo autorizado.
+1. Hospedar o backend e configurar a conta Belvo.
+2. Adicionar persistência local das transações reais para uso offline.
+3. Persistir no servidor o estado dos webhooks/conexões.
+4. Melhorar categorização e permitir correção manual.
+5. Adicionar orçamento, metas, recorrências e alertas.
+6. Para distribuição multiusuário, substituir o código de acesso pessoal por autenticação individual e App Links HTTPS verificados.
