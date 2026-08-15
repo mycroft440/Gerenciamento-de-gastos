@@ -100,7 +100,10 @@ export class BelvoClient {
   }
 
   deleteLink(linkId) {
-    return this.request(`/api/links/${encodeURIComponent(linkId)}/`, { method: "DELETE" });
+    return this.request(`/api/links/${encodeURIComponent(linkId)}/`, {
+      method: "DELETE",
+      headers: { "X-Belvo-Request-Mode": "async" },
+    });
   }
 }
 
