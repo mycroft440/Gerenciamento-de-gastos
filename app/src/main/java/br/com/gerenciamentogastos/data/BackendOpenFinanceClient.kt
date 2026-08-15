@@ -8,7 +8,6 @@ import br.com.gerenciamentogastos.model.TransactionType
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
-import java.io.BufferedReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.LocalDate
@@ -103,7 +102,7 @@ class BackendOpenFinanceClient(
 
                 add(
                     FinanceTransaction(
-                        id = item.optString("id", "belvo-$index-${date}"),
+                        id = item.optString("id", "belvo-$index-$date"),
                         description = description,
                         amount = item.optDouble("amount", 0.0),
                         type = type,
@@ -155,13 +154,13 @@ class BackendOpenFinanceClient(
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(body.toString()) }
+                outputStream.bufferedWriter(Charsets.UTF_8).use { writer -> writer.write(body.toString()) }
             }
         }
 
         val code = connection.responseCode
         val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-        val text = stream?.bufferedReader()?.use(BufferedReader::readText).orEmpty()
+        val text = stream?.bufferedReader()?.use { reader -> reader.readText() }.orEmpty()
         if (code !in 200..299) {
             val message = runCatching {
                 (JSONTokener(text).nextValue() as JSONObject).optString("error")
