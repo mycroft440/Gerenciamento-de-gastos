@@ -11,8 +11,13 @@ android {
         applicationId = "br.com.gerenciamentogastos"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+
+        val backendBaseUrl = providers.gradleProperty("BACKEND_BASE_URL")
+            .orElse("https://example.invalid")
+            .get()
+        buildConfigField("String", "BACKEND_BASE_URL", "\"$backendBaseUrl\"")
     }
 
     buildTypes {
@@ -27,6 +32,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
