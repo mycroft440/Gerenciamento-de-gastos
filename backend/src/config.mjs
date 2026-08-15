@@ -12,6 +12,8 @@ export function loadConfig() {
     belvoBaseUrl: process.env.BELVO_BASE_URL ?? "https://sandbox.belvo.com",
     belvoSecretId: env("BELVO_SECRET_ID"),
     belvoSecretPassword: env("BELVO_SECRET_PASSWORD"),
+    appAccessCode: env("APP_ACCESS_CODE"),
+    sessionSigningKey: env("SESSION_SIGNING_KEY"),
     companyName: process.env.COMPANY_NAME ?? "Gerenciamento de Gastos",
     companyIconUrl: env("COMPANY_ICON_URL"),
     companyLogoUrl: env("COMPANY_LOGO_URL"),
