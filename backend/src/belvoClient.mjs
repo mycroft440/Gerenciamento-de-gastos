@@ -1,6 +1,7 @@
 const WIDGET_SCOPES = "read_institutions,write_links,read_consents,write_consents,write_consent_callback,delete_consents";
 const CONSENT_PERMISSIONS = ["REGISTER", "ACCOUNTS", "CREDIT_CARDS", "CREDIT_OPERATIONS"];
 const FETCH_RESOURCES = ["ACCOUNTS", "TRANSACTIONS"];
+const DECIMAL_SOURCE_KEYS = new Set(["amount", "local_currency_amount"]);
 
 export class BelvoProviderError extends Error {
   constructor(message, { providerStatus = 502, payload = null, cause = undefined } = {}) {
@@ -16,7 +17,17 @@ export class BelvoProviderError extends Error {
 function parsePayload(text) {
   if (!text) return null;
   try {
-    return JSON.parse(text);
+    return JSON.parse(text, (key, value, context) => {
+      if (
+        DECIMAL_SOURCE_KEYS.has(key) &&
+        typeof value === "number" &&
+        context?.source &&
+        /^\d{1,15}(?:\.\d{1,4})?$/.test(context.source)
+      ) {
+        return context.source;
+      }
+      return value;
+    });
   } catch (cause) {
     throw new BelvoProviderError("Resposta inválida do provedor Open Finance", { cause });
   }
