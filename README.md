@@ -42,6 +42,10 @@ Isso permite que o backend consulte `/api/links/?external_id=...` na Belvo e ree
 
 O app remove automaticamente o antigo `external_id` gerado localmente por versões anteriores; a identidade de autorização passa a existir somente no backend.
 
+### Compatibilidade com builds experimentais anteriores
+
+Links que tenham sido criados **antes** desta arquitetura usando o UUID local antigo continuam associados àquele `external_id` na Belvo. A documentação atual da API não oferece uma migração comprovada desse campo no fluxo adotado aqui, portanto o projeto não tenta reatribuir esses links de forma insegura ou não documentada. Como esta mudança ocorre ainda no estágio pré-release/MVP, conexões experimentais antigas devem ser removidas/recriadas sob o `PERSONAL_SUBJECT` estável antes do primeiro uso real.
+
 ## Stack
 
 ### Android
