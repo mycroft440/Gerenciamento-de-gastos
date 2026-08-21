@@ -87,6 +87,21 @@ test("recusa paginação que tenta sair da origem da Belvo", async () => {
   const client = new BelvoClient(config, fetchImpl);
   await assert.rejects(
     () => client.listAccounts("00000000-0000-4000-8000-000000000001"),
-    /origem inesperada/
+    (error) => error.isProviderError === true && error.status === 502
   );
+});
+
+test("erro 401 da Belvo permanece identificado como upstream 502", async () => {
+  const fetchImpl = async () => new Response(JSON.stringify({ detail: "invalid provider credentials" }), { status: 401 });
+  const client = new BelvoClient(config, fetchImpl);
+  await assert.rejects(
+    () => client.listTransactions("00000000-0000-4000-8000-000000000001"),
+    (error) => error.isProviderError === true && error.providerStatus === 401 && error.status === 502
+  );
+});
+
+test("getLink transforma somente 404 real do provedor em ausência", async () => {
+  const fetchImpl = async () => new Response(JSON.stringify({ detail: "not found" }), { status: 404 });
+  const client = new BelvoClient(config, fetchImpl);
+  assert.equal(await client.getLink("00000000-0000-4000-8000-000000000001"), null);
 });
