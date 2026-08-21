@@ -5,8 +5,10 @@ import { BelvoClient, isValidCpf, normalizeCpf } from "./belvoClient.mjs";
 import { createSessionManager, isValidSessionSubject } from "./auth.mjs";
 import { SlidingWindowRateLimiter } from "./rateLimit.mjs";
 import { OpenFinanceStateStore } from "./stateStore.mjs";
+import { toTransactionPage } from "./transactionView.mjs";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const config = loadConfig();
 const belvo = new BelvoClient(config);
 const sessions = createSessionManager({
@@ -120,6 +122,12 @@ function effectiveWebhookOwner(linkId, externalId) {
   return isValidSessionSubject(externalId) ? externalId : null;
 }
 
+function validIsoDate(value) {
+  if (!DATE_PATTERN.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
 
@@ -179,14 +187,6 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    const accountsLinkId = linkIdFrom(url.pathname, "accounts");
-    if (req.method === "GET" && accountsLinkId) {
-      const session = requireSession(req, res);
-      if (!session) return;
-      await requireOwnedLink(session, accountsLinkId);
-      return json(res, 200, await belvo.listAccounts(accountsLinkId));
-    }
-
     const transactionsLinkId = linkIdFrom(url.pathname, "transactions");
     if (req.method === "GET" && transactionsLinkId) {
       const session = requireSession(req, res);
@@ -194,7 +194,11 @@ const server = http.createServer(async (req, res) => {
       await requireOwnedLink(session, transactionsLinkId);
       const dateFrom = url.searchParams.get("dateFrom");
       const dateTo = url.searchParams.get("dateTo");
-      return json(res, 200, await belvo.listTransactions(transactionsLinkId, dateFrom, dateTo));
+      if (dateFrom && !validIsoDate(dateFrom)) return json(res, 400, { error: "invalid_date_from" });
+      if (dateTo && !validIsoDate(dateTo)) return json(res, 400, { error: "invalid_date_to" });
+      if (dateFrom && dateTo && dateFrom > dateTo) return json(res, 400, { error: "invalid_date_range" });
+      const providerPage = await belvo.listTransactions(transactionsLinkId, dateFrom, dateTo);
+      return json(res, 200, toTransactionPage(providerPage));
     }
 
     const deleteMatch = url.pathname.match(/^\/v1\/open-finance\/links\/([^/]+)$/);
