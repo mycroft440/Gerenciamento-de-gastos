@@ -2,14 +2,22 @@ const WIDGET_SCOPES = "read_institutions,write_links,read_consents,write_consent
 const CONSENT_PERMISSIONS = ["REGISTER", "ACCOUNTS", "CREDIT_CARDS", "CREDIT_OPERATIONS"];
 const FETCH_RESOURCES = ["ACCOUNTS", "TRANSACTIONS"];
 
+export class BelvoProviderError extends Error {
+  constructor(message, { status = 502, payload = null, cause = undefined } = {}) {
+    super(message, { cause });
+    this.name = "BelvoProviderError";
+    this.status = status;
+    this.payload = payload;
+    this.isProviderError = true;
+  }
+}
+
 function parsePayload(text) {
   if (!text) return null;
   try {
     return JSON.parse(text);
-  } catch {
-    const error = new Error("Resposta inválida do provedor Open Finance");
-    error.status = 502;
-    throw error;
+  } catch (cause) {
+    throw new BelvoProviderError("Resposta inválida do provedor Open Finance", { cause });
   }
 }
 
@@ -23,9 +31,7 @@ export class BelvoClient {
   async request(path, options = {}) {
     const url = new URL(path, this.config.belvoBaseUrl);
     if (url.origin !== this.baseOrigin) {
-      const error = new Error("Paginação do provedor apontou para origem inesperada");
-      error.status = 502;
-      throw error;
+      throw new BelvoProviderError("Paginação do provedor apontou para origem inesperada");
     }
 
     const auth = Buffer.from(`${this.config.belvoSecretId}:${this.config.belvoSecretPassword}`).toString("base64");
@@ -43,10 +49,10 @@ export class BelvoClient {
     const text = await response.text();
     const payload = parsePayload(text);
     if (!response.ok) {
-      const error = new Error(`Belvo respondeu ${response.status}`);
-      error.status = response.status;
-      error.payload = payload;
-      throw error;
+      throw new BelvoProviderError(`Belvo respondeu ${response.status}`, {
+        status: response.status,
+        payload,
+      });
     }
     return payload;
   }
@@ -83,9 +89,7 @@ export class BelvoClient {
 
     const token = await this.request("/api/token/", { method: "POST", body: JSON.stringify(payload) });
     if (!token?.access || typeof token.access !== "string") {
-      const error = new Error("Belvo não retornou access token do widget");
-      error.status = 502;
-      throw error;
+      throw new BelvoProviderError("Belvo não retornou access token do widget");
     }
 
     const params = new URLSearchParams({
@@ -112,9 +116,7 @@ export class BelvoClient {
     let pages = 0;
     while (next) {
       if (++pages > maxPages) {
-        const error = new Error("Paginação do provedor excedeu o limite de segurança");
-        error.status = 502;
-        throw error;
+        throw new BelvoProviderError("Paginação do provedor excedeu o limite de segurança");
       }
       const page = await this.request(next);
       if (Array.isArray(page)) {
@@ -122,9 +124,7 @@ export class BelvoClient {
         break;
       }
       if (!page || !Array.isArray(page.results)) {
-        const error = new Error("Formato de paginação inesperado do provedor");
-        error.status = 502;
-        throw error;
+        throw new BelvoProviderError("Formato de paginação inesperado do provedor");
       }
       results.push(...page.results);
       next = page.next || null;
