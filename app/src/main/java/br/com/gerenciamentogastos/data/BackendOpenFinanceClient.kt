@@ -25,7 +25,8 @@ class BackendOpenFinanceClient(
         val deletionPending: Boolean,
         val deleted: Boolean,
         val accountsError: String?,
-        val transactionsError: String?
+        val transactionsError: String?,
+        val lastWebhookAt: String?
     ) {
         val lastError: String?
             get() = transactionsError
@@ -89,7 +90,8 @@ class BackendOpenFinanceClient(
             deletionPending = json.optBoolean("deletionPending"),
             deleted = json.optBoolean("deleted"),
             accountsError = nullableString(json, "accountsError"),
-            transactionsError = nullableString(json, "transactionsError")
+            transactionsError = nullableString(json, "transactionsError"),
+            lastWebhookAt = nullableString(json, "lastWebhookAt")
         )
     }
 
