@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -44,23 +46,31 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import br.com.gerenciamentogastos.data.BackendOpenFinanceClient
 import br.com.gerenciamentogastos.data.FinanceRepository
+import br.com.gerenciamentogastos.data.OpenFinanceLocalStore
 import br.com.gerenciamentogastos.model.Category
 import br.com.gerenciamentogastos.model.FinancialSummary
 import br.com.gerenciamentogastos.model.FinanceTransaction
+import br.com.gerenciamentogastos.model.TransactionStatus
 import br.com.gerenciamentogastos.model.TransactionType
+import java.math.BigDecimal
 import java.text.NumberFormat
+import java.time.YearMonth
 import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
+import java.util.Currency
 import java.util.Locale
-import java.util.UUID
 
-private val currencyFormat = NumberFormat.getCurrencyInstance(Locale("pt", "BR"))
+private val ptBr = Locale("pt", "BR")
+private val brlFormat = NumberFormat.getCurrencyInstance(ptBr)
 private val dateFormat = DateTimeFormatter.ofPattern("dd/MM")
 
 @Composable
@@ -70,11 +80,25 @@ fun FinanceApp(
     repository: FinanceRepository = remember { FinanceRepository() },
     openFinanceClient: BackendOpenFinanceClient = remember { BackendOpenFinanceClient() }
 ) {
+    val context = LocalContext.current
+    val localStore = remember { OpenFinanceLocalStore(context.applicationContext) }
     val demoTransactions = remember { repository.transactions() }
-    var liveTransactions by remember { mutableStateOf<List<FinanceTransaction>?>(null) }
-    val transactions = liveTransactions ?: demoTransactions
-    val summary = remember(transactions) { repository.summary(transactions) }
+    var connectedLinks by remember { mutableStateOf(localStore.linkIds()) }
+    var liveTransactions by remember { mutableStateOf<List<FinanceTransaction>>(emptyList()) }
+    var hasSynced by remember { mutableStateOf(false) }
+    var selectedMonth by remember { mutableStateOf(YearMonth.now()) }
     var selectedTab by remember { mutableIntStateOf(0) }
+
+    val usingDemo = connectedLinks.isEmpty()
+    val transactions = if (usingDemo) demoTransactions else liveTransactions
+    val monthTransactions = remember(transactions, selectedMonth) {
+        transactions.filter { YearMonth.from(it.date) == selectedMonth }
+    }
+    val summary = remember(monthTransactions) { repository.summary(monthTransactions) }
+
+    DisposableEffect(openFinanceClient) {
+        onDispose { openFinanceClient.close() }
+    }
 
     LaunchedEffect(callbackUri) {
         if (callbackUri != null) selectedTab = 2
@@ -106,18 +130,38 @@ fun FinanceApp(
     ) { padding ->
         when (selectedTab) {
             0 -> DashboardScreen(
-                transactions = transactions,
+                transactions = monthTransactions,
                 summary = summary,
-                live = liveTransactions != null,
+                selectedMonth = selectedMonth,
+                onPreviousMonth = { selectedMonth = selectedMonth.minusMonths(1) },
+                onNextMonth = { if (selectedMonth < YearMonth.now()) selectedMonth = selectedMonth.plusMonths(1) },
+                usingDemo = usingDemo,
+                connectionCount = connectedLinks.size,
+                hasSynced = hasSynced,
                 modifier = Modifier.padding(padding)
             )
-            1 -> TransactionsScreen(transactions, Modifier.padding(padding))
+            1 -> TransactionsScreen(
+                transactions = transactions,
+                waitingForSync = !usingDemo && !hasSynced,
+                modifier = Modifier.padding(padding)
+            )
             else -> AccountsScreen(
                 client = openFinanceClient,
+                localStore = localStore,
+                connectedLinkIds = connectedLinks,
                 callbackUri = callbackUri,
                 onCallbackHandled = onCallbackHandled,
-                onTransactionsLoaded = { liveTransactions = it },
-                onDisconnected = { liveTransactions = null },
+                onLinksChanged = { links ->
+                    if (links != connectedLinks) {
+                        connectedLinks = links
+                        liveTransactions = emptyList()
+                        hasSynced = false
+                    }
+                },
+                onTransactionsLoaded = { loaded ->
+                    liveTransactions = loaded
+                    hasSynced = true
+                },
                 modifier = Modifier.padding(padding)
             )
         }
@@ -134,17 +178,27 @@ private fun ScreenHeader(title: String, subtitle: String) {
 private fun DashboardScreen(
     transactions: List<FinanceTransaction>,
     summary: FinancialSummary,
-    live: Boolean,
+    selectedMonth: YearMonth,
+    onPreviousMonth: () -> Unit,
+    onNextMonth: () -> Unit,
+    usingDemo: Boolean,
+    connectionCount: Int,
+    hasSynced: Boolean,
     modifier: Modifier = Modifier
 ) {
     val expensesByCategory = remember(transactions) {
         transactions
-            .filter { it.type == TransactionType.EXPENSE }
+            .filter { it.type == TransactionType.EXPENSE && it.currency == "BRL" }
             .groupBy { it.category }
-            .mapValues { (_, items) -> items.sumOf { it.amount } }
+            .mapValues { (_, items) ->
+                items.fold(BigDecimal.ZERO) { total, item -> total.add(item.amount) }
+            }
             .toList()
             .sortedByDescending { it.second }
     }
+    val monthName = selectedMonth.month.getDisplayName(TextStyle.FULL, ptBr)
+        .replaceFirstChar { if (it.isLowerCase()) it.titlecase(ptBr) else it.toString() }
+    val currentMonth = YearMonth.now()
 
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(horizontal = 18.dp),
@@ -152,30 +206,69 @@ private fun DashboardScreen(
     ) {
         item {
             Spacer(Modifier.height(16.dp))
-            ScreenHeader("Gerenciamento de gastos", "Visão consolidada • Agosto de 2026")
+            ScreenHeader("Gerenciamento de gastos", "Visão consolidada • $monthName de ${selectedMonth.year}")
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(onClick = onPreviousMonth) { Text("‹ Mês anterior") }
+                OutlinedButton(onClick = onNextMonth, enabled = selectedMonth < currentMonth) { Text("Próximo ›") }
+            }
             Spacer(Modifier.height(8.dp))
             AssistChip(
                 onClick = {},
-                label = { Text(if (live) "Open Finance conectado" else "Dados de demonstração") }
+                label = {
+                    Text(
+                        when {
+                            usingDemo -> "Dados de demonstração"
+                            !hasSynced -> "$connectionCount conexão(ões) • sincronização necessária"
+                            else -> "Open Finance • $connectionCount conexão(ões)"
+                        }
+                    )
+                }
             )
         }
 
         item { BalanceCard(summary) }
 
+        if (summary.excludedForeignTransactions > 0) {
+            item {
+                Text(
+                    "${summary.excludedForeignTransactions} movimentação(ões) sem valor convertido para BRL não entram nos totais.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
         item {
             Text("Gastos por categoria", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         }
 
-        items(expensesByCategory) { (category, amount) ->
-            CategoryRow(category, amount, summary.expenses)
+        if (expensesByCategory.isEmpty()) {
+            item { Text("Nenhum gasto em BRL neste mês.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        } else {
+            items(expensesByCategory) { (category, amount) ->
+                CategoryRow(category, amount, summary.expenses)
+            }
         }
 
         item {
-            Text("Últimas movimentações", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("Últimas movimentações do mês", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         }
 
-        items(transactions.take(5)) { transaction ->
-            TransactionRow(transaction)
+        if (transactions.isEmpty()) {
+            item {
+                Text(
+                    if (!usingDemo && !hasSynced) "Sincronize as contas para carregar as movimentações reais."
+                    else "Nenhuma movimentação neste mês.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            items(transactions.take(5), key = { it.id }) { transaction -> TransactionRow(transaction) }
         }
 
         item { Spacer(Modifier.height(12.dp)) }
@@ -191,11 +284,7 @@ private fun BalanceCard(summary: FinancialSummary) {
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Saldo do período", style = MaterialTheme.typography.labelLarge)
-            Text(
-                currencyFormat.format(summary.balance),
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
+            Text(brlFormat.format(summary.balance), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 SummaryMetric("Entradas", summary.income)
                 SummaryMetric("Saídas", summary.expenses)
@@ -205,16 +294,18 @@ private fun BalanceCard(summary: FinancialSummary) {
 }
 
 @Composable
-private fun SummaryMetric(label: String, value: Double) {
+private fun SummaryMetric(label: String, value: BigDecimal) {
     Column {
         Text(label, style = MaterialTheme.typography.labelMedium)
-        Text(currencyFormat.format(value), fontWeight = FontWeight.SemiBold)
+        Text(brlFormat.format(value), fontWeight = FontWeight.SemiBold)
     }
 }
 
 @Composable
-private fun CategoryRow(category: Category, amount: Double, total: Double) {
-    val progress = if (total > 0) (amount / total).toFloat().coerceIn(0f, 1f) else 0f
+private fun CategoryRow(category: Category, amount: BigDecimal, total: BigDecimal) {
+    val progress = if (total.signum() > 0) {
+        amount.divide(total, 6, java.math.RoundingMode.HALF_UP).toFloat().coerceIn(0f, 1f)
+    } else 0f
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
@@ -222,27 +313,34 @@ private fun CategoryRow(category: Category, amount: Double, total: Double) {
             }
             Spacer(Modifier.width(10.dp))
             Text(category.label, modifier = Modifier.weight(1f))
-            Text(currencyFormat.format(amount), fontWeight = FontWeight.SemiBold)
+            Text(brlFormat.format(amount), fontWeight = FontWeight.SemiBold)
         }
         LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
     }
 }
 
 @Composable
-private fun TransactionsScreen(transactions: List<FinanceTransaction>, modifier: Modifier = Modifier) {
+private fun TransactionsScreen(
+    transactions: List<FinanceTransaction>,
+    waitingForSync: Boolean,
+    modifier: Modifier = Modifier
+) {
     var query by remember { mutableStateOf("") }
-    val filtered = remember(query, transactions) {
-        if (query.isBlank()) transactions
-        else transactions.filter {
-            it.description.contains(query, ignoreCase = true) ||
-                it.category.label.contains(query, ignoreCase = true) ||
-                it.source.contains(query, ignoreCase = true)
+    var typeFilter by remember { mutableStateOf<TransactionType?>(null) }
+    val filtered = remember(query, typeFilter, transactions) {
+        transactions.filter { transaction ->
+            val textMatches = query.isBlank() ||
+                transaction.description.contains(query, ignoreCase = true) ||
+                transaction.category.label.contains(query, ignoreCase = true) ||
+                transaction.source.contains(query, ignoreCase = true)
+            val typeMatches = typeFilter == null || transaction.type == typeFilter
+            textMatches && typeMatches
         }
     }
 
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(16.dp))
-        ScreenHeader("Transações", "Tudo que entrou e saiu das contas conectadas")
+        ScreenHeader("Transações", "Histórico disponível das contas conectadas")
         Spacer(Modifier.height(14.dp))
         OutlinedTextField(
             value = query,
@@ -250,16 +348,36 @@ private fun TransactionsScreen(transactions: List<FinanceTransaction>, modifier:
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             label = { Text("Buscar transação") },
-            placeholder = { Text("Ex.: mercado, Nubank, transporte") }
+            placeholder = { Text("Ex.: mercado, banco, transporte") }
         )
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AssistChip(onClick = { typeFilter = null }, label = { Text(if (typeFilter == null) "✓ Todas" else "Todas") })
+            AssistChip(
+                onClick = { typeFilter = TransactionType.INCOME },
+                label = { Text(if (typeFilter == TransactionType.INCOME) "✓ Entradas" else "Entradas") }
+            )
+            AssistChip(
+                onClick = { typeFilter = TransactionType.EXPENSE },
+                label = { Text(if (typeFilter == TransactionType.EXPENSE) "✓ Saídas" else "Saídas") }
+            )
+        }
+        Spacer(Modifier.height(8.dp))
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            items(filtered, key = { it.id }) { transaction ->
-                TransactionRow(transaction)
-                HorizontalDivider()
+        if (filtered.isEmpty()) {
+            Text(
+                if (waitingForSync) "Há contas conectadas, mas os dados ainda não foram sincronizados nesta abertura do app."
+                else "Nenhuma transação encontrada.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                items(filtered, key = { it.id }) { transaction ->
+                    TransactionRow(transaction)
+                    HorizontalDivider()
+                }
+                item { Spacer(Modifier.height(16.dp)) }
             }
-            item { Spacer(Modifier.height(16.dp)) }
         }
     }
 }
@@ -279,14 +397,10 @@ private fun TransactionRow(transaction: FinanceTransaction) {
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
+            Text(transaction.description, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+            val pending = if (transaction.status == TransactionStatus.PENDING) " • pendente" else ""
             Text(
-                transaction.description,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                "${transaction.category.label} • ${transaction.source} • ${transaction.date.format(dateFormat)}",
+                "${transaction.category.label} • ${transaction.source} • ${transaction.date.format(dateFormat)}$pending",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -294,57 +408,43 @@ private fun TransactionRow(transaction: FinanceTransaction) {
         Spacer(Modifier.width(8.dp))
         val prefix = if (transaction.type == TransactionType.INCOME) "+" else "−"
         Text(
-            "$prefix ${currencyFormat.format(transaction.amount)}",
+            "$prefix ${formatMoney(transaction.amount, transaction.currency)}",
             fontWeight = FontWeight.SemiBold,
-            color = if (transaction.type == TransactionType.INCOME)
-                MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurface
+            color = if (transaction.type == TransactionType.INCOME) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
         )
     }
+}
+
+private fun formatMoney(amount: BigDecimal, currencyCode: String): String {
+    return runCatching {
+        NumberFormat.getCurrencyInstance(ptBr).apply { currency = Currency.getInstance(currencyCode) }.format(amount)
+    }.getOrElse { "$currencyCode ${amount.toPlainString()}" }
 }
 
 @Composable
 private fun AccountsScreen(
     client: BackendOpenFinanceClient,
+    localStore: OpenFinanceLocalStore,
+    connectedLinkIds: Set<String>,
     callbackUri: Uri?,
     onCallbackHandled: () -> Unit,
+    onLinksChanged: (Set<String>) -> Unit,
     onTransactionsLoaded: (List<FinanceTransaction>) -> Unit,
-    onDisconnected: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("open_finance", 0) }
-    val externalId = remember {
-        prefs.getString("external_id", null) ?: UUID.randomUUID().toString().also {
-            prefs.edit().putString("external_id", it).apply()
-        }
-    }
-
+    val externalId = remember { localStore.externalId() }
     var accessCode by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var cpf by remember { mutableStateOf("") }
-    var linkId by remember { mutableStateOf(prefs.getString("belvo_link_id", null)) }
     var pendingLinkId by remember { mutableStateOf<String?>(null) }
     var widgetUrl by remember { mutableStateOf<String?>(null) }
     var status by remember {
-        mutableStateOf(if (linkId == null) "Nenhum banco conectado." else "Banco conectado. Sincronize para buscar os dados.")
+        mutableStateOf(
+            if (connectedLinkIds.isEmpty()) "Nenhum banco conectado."
+            else "${connectedLinkIds.size} conexão(ões) salva(s). Sincronize para buscar os dados."
+        )
     }
     var busy by remember { mutableStateOf(false) }
-
-    fun clearLocalLink(message: String) {
-        prefs.edit().remove("belvo_link_id").apply()
-        linkId = null
-        pendingLinkId = null
-        onDisconnected()
-        status = message
-    }
-
-    fun persistLink(id: String) {
-        linkId = id
-        pendingLinkId = null
-        prefs.edit().putString("belvo_link_id", id).apply()
-        status = "Consentimento confirmado. Aguarde a preparação do histórico e toque em Sincronizar."
-    }
 
     fun authenticateThen(action: (String) -> Unit) {
         if (accessCode.isBlank()) {
@@ -354,15 +454,26 @@ private fun AccountsScreen(
         }
         busy = true
         client.authenticate(accessCode, externalId) { authResult ->
-            authResult.onSuccess { token -> action(token) }
-                .onFailure {
-                    busy = false
-                    status = "Não foi possível autenticar: ${it.message ?: "erro desconhecido"}"
-                }
+            authResult.onSuccess(action).onFailure {
+                busy = false
+                status = "Não foi possível autenticar: ${it.message ?: "erro desconhecido"}"
+            }
         }
     }
 
+    fun persistVerifiedLink(id: String) {
+        val updated = localStore.addLink(id)
+        pendingLinkId = null
+        onLinksChanged(updated)
+        status = "Consentimento confirmado. Aguarde a preparação do histórico e toque em Sincronizar tudo."
+    }
+
     fun confirmLink(candidateId: String) {
+        if (candidateId in connectedLinkIds) {
+            pendingLinkId = null
+            status = "Esta conexão já está salva."
+            return
+        }
         pendingLinkId = candidateId
         authenticateThen { token ->
             client.linkStatus(token, candidateId) { result ->
@@ -372,7 +483,7 @@ private fun AccountsScreen(
                         pendingLinkId = null
                         status = "A conexão informada já foi removida."
                     } else {
-                        persistLink(candidateId)
+                        persistVerifiedLink(candidateId)
                     }
                 }.onFailure {
                     status = "O retorno do banco não pôde ser validado. A conexão não foi salva."
@@ -396,7 +507,7 @@ private fun AccountsScreen(
         }
     }
 
-    fun connect() {
+    fun connectAnother() {
         if (!client.isConfigured()) {
             status = "Defina BACKEND_BASE_URL no build para habilitar o Open Finance."
             return
@@ -418,58 +529,85 @@ private fun AccountsScreen(
         }
     }
 
-    fun sync() {
-        val currentLink = linkId
-        if (currentLink == null) {
+    fun syncAll() {
+        val ids = connectedLinkIds.toList()
+        if (ids.isEmpty()) {
             status = "Conecte uma instituição primeiro."
             return
         }
         authenticateThen { token ->
-            client.linkStatus(token, currentLink) { statusResult ->
-                statusResult.onSuccess { readiness ->
-                    when {
-                        readiness.deleted -> {
-                            busy = false
-                            clearLocalLink("A instituição confirmou a remoção da conexão.")
-                        }
-                        readiness.deletionPending -> {
-                            busy = false
-                            status = "A remoção foi solicitada e ainda aguarda confirmação da Belvo."
-                        }
-                        readiness.lastError != null -> {
-                            busy = false
-                            status = "A instituição não conseguiu preparar todos os dados (${readiness.lastError}). Tente novamente depois."
-                        }
-                        !readiness.transactionsReady -> {
-                            busy = false
-                            status = "O histórico de transações ainda está sendo preparado pela instituição. Tente sincronizar novamente depois."
-                        }
-                        else -> client.transactions(token, currentLink) { transactionsResult ->
-                            busy = false
-                            transactionsResult.onSuccess { transactions ->
-                                onTransactionsLoaded(transactions)
-                                status = "Sincronização concluída: ${transactions.size} movimentações carregadas."
-                            }.onFailure {
-                                status = "Falha ao carregar transações: ${it.message ?: "erro desconhecido"}"
-                            }
-                        }
-                    }
-                }.onFailure {
-                    busy = false
-                    status = "Falha ao consultar o estado da conexão: ${it.message ?: "erro desconhecido"}"
+            val collected = mutableListOf<FinanceTransaction>()
+            val notes = mutableListOf<String>()
+            var loadedAny = false
+
+            fun finish() {
+                busy = false
+                val currentLinks = localStore.linkIds()
+                if (currentLinks != connectedLinkIds) onLinksChanged(currentLinks)
+                if (loadedAny) {
+                    onTransactionsLoaded(collected.distinctBy { it.id }.sortedByDescending { it.date })
+                }
+                status = when {
+                    loadedAny && notes.isEmpty() -> "Sincronização concluída: ${collected.distinctBy { it.id }.size} movimentações consolidadas."
+                    loadedAny -> "Sincronização parcial concluída. ${notes.joinToString(" ")}"
+                    notes.isNotEmpty() -> notes.joinToString(" ")
+                    else -> "Nenhum dado novo foi carregado."
                 }
             }
+
+            fun loadIndex(index: Int) {
+                if (index >= ids.size) {
+                    finish()
+                    return
+                }
+                val id = ids[index]
+                client.linkStatus(token, id) { statusResult ->
+                    statusResult.onSuccess { readiness ->
+                        when {
+                            readiness.deleted -> {
+                                localStore.removeLink(id)
+                                notes += "Uma conexão removida pela instituição foi apagada localmente."
+                                loadIndex(index + 1)
+                            }
+                            readiness.deletionPending -> {
+                                notes += "Uma conexão ainda aguarda confirmação de remoção."
+                                loadIndex(index + 1)
+                            }
+                            readiness.transactionsError != null -> {
+                                notes += "Uma instituição informou erro ao preparar transações."
+                                loadIndex(index + 1)
+                            }
+                            !readiness.transactionsReady -> {
+                                notes += "O histórico de uma instituição ainda está sendo preparado."
+                                loadIndex(index + 1)
+                            }
+                            else -> client.transactions(token, id) { transactionsResult ->
+                                transactionsResult.onSuccess {
+                                    loadedAny = true
+                                    collected += it
+                                }.onFailure {
+                                    notes += "Falha ao carregar uma das conexões."
+                                }
+                                loadIndex(index + 1)
+                            }
+                        }
+                    }.onFailure {
+                        notes += "Não foi possível verificar uma das conexões."
+                        loadIndex(index + 1)
+                    }
+                }
+            }
+
+            loadIndex(0)
         }
     }
 
-    fun disconnect() {
-        val currentLink = linkId ?: return
+    fun requestDisconnect(id: String) {
         authenticateThen { token ->
-            client.deleteLink(token, currentLink) { result ->
+            client.deleteLink(token, id) { result ->
                 busy = false
                 result.onSuccess {
-                    onDisconnected()
-                    status = "Remoção solicitada. O link será mantido localmente até a Belvo confirmar a exclusão; use Sincronizar / verificar."
+                    status = "Remoção solicitada. A conexão permanece salva até a Belvo confirmar a exclusão; use Sincronizar tudo para verificar."
                 }.onFailure {
                     status = "Falha ao solicitar a remoção: ${it.message ?: "erro desconhecido"}"
                 }
@@ -483,14 +621,13 @@ private fun AccountsScreen(
     ) {
         item {
             Spacer(Modifier.height(16.dp))
-            ScreenHeader("Contas", "Conecte seus bancos pelo Open Finance")
+            ScreenHeader("Contas", "Conecte e consolide vários bancos pelo Open Finance")
         }
-
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Text(
                     if (client.isConfigured())
-                        "A senha do seu banco nunca é solicitada por este app. O consentimento acontece no fluxo da instituição, intermediado pela Belvo."
+                        "A senha do seu banco nunca é solicitada por este app. O consentimento acontece no fluxo da instituição, intermediado pela Belvo. A carga inicial pode abranger até 12 meses."
                     else
                         "O código do Open Finance está pronto, mas o APK atual foi gerado sem BACKEND_BASE_URL. Configure o backend antes de tentar conectar.",
                     modifier = Modifier.padding(16.dp),
@@ -498,7 +635,6 @@ private fun AccountsScreen(
                 )
             }
         }
-
         item {
             OutlinedTextField(
                 value = accessCode,
@@ -506,68 +642,86 @@ private fun AccountsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 label = { Text("Código de acesso do app") },
-                visualTransformation = PasswordVisualTransformation()
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
             )
         }
 
-        if (linkId == null) {
-            if (pendingLinkId != null) {
-                item {
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Retorno bancário pendente", fontWeight = FontWeight.SemiBold)
-                            Text("Confirme o código de acesso para validar que esta conexão realmente pertence a este app.")
-                            Button(
-                                onClick = { pendingLinkId?.let(::confirmLink) },
-                                enabled = !busy,
-                                modifier = Modifier.fillMaxWidth()
-                            ) { Text("Confirmar conexão") }
+        if (connectedLinkIds.isNotEmpty()) {
+            item {
+                Text("Conexões salvas", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            }
+            items(connectedLinkIds.sorted()) { id ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Conexão Open Finance", fontWeight = FontWeight.SemiBold)
+                            Text("ID ${id.take(8)}…", style = MaterialTheme.typography.bodySmall)
                         }
+                        OutlinedButton(onClick = { requestDisconnect(id) }, enabled = !busy) { Text("Remover") }
                     }
                 }
             }
             item {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text("Nome completo") }
-                )
-            }
-            item {
-                OutlinedTextField(
-                    value = cpf,
-                    onValueChange = { cpf = it.take(14) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text("CPF") }
-                )
-            }
-            item {
-                Button(onClick = ::connect, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (busy) "Conectando…" else "Conectar banco")
+                Button(onClick = ::syncAll, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (busy) "Sincronizando…" else "Sincronizar tudo")
                 }
             }
-        } else {
+        }
+
+        if (pendingLinkId != null) {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Conexão Open Finance", fontWeight = FontWeight.SemiBold)
-                        Text("Link: ${linkId?.take(8)}…", style = MaterialTheme.typography.bodySmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = ::sync, enabled = !busy) { Text("Sincronizar / verificar") }
-                            OutlinedButton(onClick = ::disconnect, enabled = !busy) { Text("Desconectar") }
-                        }
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Retorno bancário pendente", fontWeight = FontWeight.SemiBold)
+                        Text("Confirme o código de acesso para validar que esta conexão realmente pertence a este app.")
+                        Button(
+                            onClick = { pendingLinkId?.let(::confirmLink) },
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Confirmar conexão") }
                     }
                 }
             }
         }
 
         item {
+            Text(
+                if (connectedLinkIds.isEmpty()) "Conectar banco" else "Adicionar outro banco",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("Nome completo") }
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = cpf,
+                onValueChange = { cpf = it.filter(Char::isDigit).take(11) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("CPF") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
+        }
+        item {
+            Button(onClick = ::connectAnother, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                Text(if (busy) "Processando…" else if (connectedLinkIds.isEmpty()) "Conectar banco" else "Adicionar banco")
+            }
+        }
+        item {
             Text(status, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-
         item { Spacer(Modifier.height(16.dp)) }
     }
 
@@ -609,9 +763,12 @@ private fun BelvoWidgetDialog(
         }
     }
 
-    Dialog(onDismissRequest = { onExit("Conexão fechada antes da conclusão.") }) {
+    Dialog(
+        onDismissRequest = { onExit("Conexão fechada antes da conclusão.") },
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Surface(
-            modifier = Modifier.fillMaxWidth().height(640.dp),
+            modifier = Modifier.fillMaxWidth(0.96f).fillMaxHeight(0.92f),
             shape = RoundedCornerShape(20.dp)
         ) {
             AndroidView(
@@ -632,9 +789,7 @@ private fun BelvoWidgetDialog(
                         settings.javaScriptCanOpenWindowsAutomatically = false
                         settings.setSupportMultipleWindows(false)
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                            settings.safeBrowsingEnabled = true
-                        }
+                        settings.safeBrowsingEnabled = true
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                                 val uri = request?.url ?: return false
