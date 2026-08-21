@@ -7,10 +7,10 @@ Revisão iniciada em agosto de 2026 sobre o MVP `Gerenciamento de Gastos`. O pro
 | Bloco | Status | Principais resultados |
 | --- | --- | --- |
 | Segurança / Open Finance | Aprovado para MVP pessoal | subject estável server-side, vínculo de sessão/link, webhook Bearer, rate limit, timeouts, minimização de dados, exclusão assíncrona e persistência técnica |
-| Backend / API | Aprovado para MVP pessoal | recuperação por `external_id`, paginação segura, erros de upstream isolados, validação de datas, DTO mínimo e SQLite persistente |
+| Backend / API | Aprovado para MVP pessoal | recuperação por `external_id`, paginação segura, erros de upstream isolados, validação de datas, DTO mínimo, precisão decimal preservada e SQLite persistente |
 | Android / persistência | Aprovado para MVP pessoal | `BigDecimal`, vários bancos, recuperação pós-reinstalação, filtro mensal, não mistura demo/real, moeda/status e cleanup de cliente/WebView |
-| UX / fluxos | Aprovado para MVP pessoal | linguagem de “Atualizar painel”, recuperação de conexões, identificação das instituições, pendentes separados dos totais processados, sem promessa de tempo real e remoção segura |
-| Testes / CI | Em validação final | testes Node/JVM, syntax check, lint, Docker, debug e release otimizado; head final ainda precisa ficar integralmente verde |
+| UX / fluxos | Aprovado para MVP pessoal | linguagem de “Atualizar painel”, recuperação de conexões, identificação das instituições, pendentes separados dos totais processados, sinalização de dados parciais, sem promessa de tempo real e remoção segura |
+| Testes / CI | Aprovado | 22 testes Node, testes JVM Android, syntax check, lint, Docker, APK debug e release otimizado; CI #97 integralmente verde |
 | Produção / compliance | Aprovado com gates externos | limitações públicas transformadas em bloqueios explícitos; ver `PRODUCTION_CHECKLIST.md` |
 
 ## Problemas relevantes encontrados e corrigidos
@@ -42,7 +42,9 @@ Revisão iniciada em agosto de 2026 sobre o MVP `Gerenciamento de Gastos`. O pro
 25. APIs Android deprecated geravam warnings no build do WebView/locale;
 26. build release não era exercitado pelo CI;
 27. transações `PENDING`, ainda não processadas pela instituição, alteravam saldo e categorias como se estivessem liquidadas;
-28. `external_id` era gerado no aparelho e os `link.id` existiam apenas localmente, fazendo uma reinstalação perder a identidade/referência necessária para reencontrar conexões.
+28. `external_id` era gerado no aparelho e os `link.id` existiam apenas localmente, fazendo uma reinstalação perder a identidade/referência necessária para reencontrar conexões;
+29. atualização parcial de várias instituições podia substituir o painel por um conjunto incompleto sem deixar o estado parcial evidente fora da tela Contas; falha total também podia deixar valores antigos aparentando atualização atual;
+30. o backend convertia valores monetários da resposta JSON para `Number` antes de devolvê-los como texto, podendo arredondar quantias dentro do intervalo aceito pelo provedor antes de o Android convertê-las para `BigDecimal`.
 
 ## Decisões deliberadas
 
@@ -53,6 +55,14 @@ O aplicativo mantém transações reais apenas em memória nesta versão. Isso r
 ### Pendentes não alteram os totais processados
 
 Transações `PENDING` continuam visíveis na lista, mas ficam fora do saldo líquido e das categorias processadas. O painel apresenta entradas e saídas pendentes em bloco separado até que a instituição as reporte como processadas.
+
+### Atualização parcial nunca é apresentada como consolidada completa
+
+Se apenas parte das conexões puder ser carregada, o estado de dados parciais é propagado para Resumo e Transações. Se nenhuma conexão puder carregar, os dados anteriores da sessão são removidos em vez de permanecerem visíveis como se fossem atuais. O usuário precisa de uma atualização integral para voltar ao estado consolidado completo.
+
+### Valores monetários preservam o decimal textual
+
+O backend usa o texto numérico original disponibilizado pelo parser JSON do Node 24 para campos monetários da Belvo, valida o formato decimal e entrega esse texto ao Android. Isso evita passar por uma conversão intermediária para `Number` capaz de perder precisão antes do `BigDecimal`.
 
 ### Identidade pessoal é estável no servidor
 
@@ -76,13 +86,13 @@ O backend valida a propriedade do `link.id`, reduzindo o impacto de callback for
 
 Para evitar remoção cega por UUID, o app persiste somente um rótulo derivado do identificador institucional da Belvo. Links antigos sem rótulo ficam com o botão Remover desativado até serem identificados pelo backend.
 
-## Definição de “Crítico satisfeito”
+## Resultado final do Crítico
 
-O Crítico considera o **código do MVP pessoal** satisfatório quando:
+O Crítico considera o **código do MVP pessoal satisfatório** no escopo revisado porque:
 
-- não existe problema conhecido crítico/alto/médio sem correção ou decisão explícita;
-- o CI final está integralmente verde;
-- limitações que dependem de infraestrutura/contratos não são apresentadas como funcionalidades prontas;
-- publicação pública é bloqueada documental e tecnicamente enquanto os pré-requisitos de identidade, domínio, privacidade e distribuição não forem atendidos.
+- não ficou problema conhecido crítico/alto/médio sem correção ou decisão explícita;
+- o CI #97 validou integralmente backend, container, testes Android, lint, APK debug e release otimizado;
+- as limitações que dependem de infraestrutura/contratos não são apresentadas como funcionalidades prontas;
+- publicação pública continua bloqueada documental e tecnicamente enquanto os pré-requisitos de identidade, domínio, privacidade e distribuição não forem atendidos.
 
-A aprovação deste relatório **não equivale a certificação da Belvo, parecer jurídico/LGPD ou aprovação do Google Play**.
+A aprovação deste relatório **não equivale a certificação da Belvo, parecer jurídico/LGPD, validação com banco real ou aprovação do Google Play**.
