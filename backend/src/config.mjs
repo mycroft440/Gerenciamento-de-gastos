@@ -42,6 +42,12 @@ function callback(name, fallback) {
   return value;
 }
 
+function statePath() {
+  const value = process.env.STATE_DB_PATH ?? "./data/openfinance.sqlite";
+  if (!value.trim() || value.includes("\0")) throw new Error("STATE_DB_PATH inválido");
+  return value;
+}
+
 export function loadConfig() {
   const belvoBaseUrl = httpsUrl("BELVO_BASE_URL", "https://sandbox.belvo.com");
   const belvoHost = new URL(belvoBaseUrl).hostname;
@@ -70,6 +76,7 @@ export function loadConfig() {
     webhookAuthToken: secret("BELVO_WEBHOOK_AUTH_TOKEN", 32),
     authMaxAttempts: positiveInt("AUTH_MAX_ATTEMPTS", 5, 1, 50),
     authWindowMs: positiveInt("AUTH_WINDOW_MS", 300_000, 10_000, 3_600_000),
+    stateDbPath: statePath(),
     companyName: process.env.COMPANY_NAME ?? "Gerenciamento de Gastos",
     companyIconUrl: httpsUrl("COMPANY_ICON_URL"),
     companyLogoUrl: httpsUrl("COMPANY_LOGO_URL"),

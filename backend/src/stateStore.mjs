@@ -94,6 +94,7 @@ export class OpenFinanceStateStore {
           last_webhook_at = ?, updated_at = ?
       WHERE link_id = ?
     `);
+    this.hasWebhookStatement = this.db.prepare(`SELECT 1 AS found FROM webhook_event WHERE webhook_id = ?`);
     this.insertWebhookStatement = this.db.prepare(`
       INSERT INTO webhook_event (webhook_id, received_at) VALUES (?, ?)
       ON CONFLICT(webhook_id) DO NOTHING
@@ -148,6 +149,10 @@ export class OpenFinanceStateStore {
     if (externalId) this.bindOwner(linkId, externalId, now);
     this.deletedStatement.run(now, now, linkId);
     return this.get(linkId);
+  }
+
+  hasWebhook(webhookId) {
+    return Boolean(this.hasWebhookStatement.get(webhookId));
   }
 
   recordWebhook(webhookId, now = new Date().toISOString()) {

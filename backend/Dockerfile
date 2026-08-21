@@ -2,7 +2,10 @@ FROM node:22-alpine
 WORKDIR /app
 COPY package.json ./
 COPY src ./src
-ENV NODE_ENV=production
+RUN mkdir -p /data && chown node:node /data
+ENV NODE_ENV=production \
+    STATE_DB_PATH=/data/openfinance.sqlite
+VOLUME ["/data"]
 EXPOSE 8080
 USER node
 CMD ["node", "src/server.mjs"]

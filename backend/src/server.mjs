@@ -4,6 +4,7 @@ import { loadConfig } from "./config.mjs";
 import { BelvoClient, isValidCpf, normalizeCpf } from "./belvoClient.mjs";
 import { createSessionManager, isValidSessionSubject } from "./auth.mjs";
 import { SlidingWindowRateLimiter } from "./rateLimit.mjs";
+import { OpenFinanceStateStore } from "./stateStore.mjs";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const config = loadConfig();
@@ -17,8 +18,8 @@ const authLimiter = new SlidingWindowRateLimiter({
   maxAttempts: config.authMaxAttempts,
   windowMs: config.authWindowMs,
 });
-const linkReadiness = new Map();
-const processedWebhookIds = new Set();
+const stateStore = new OpenFinanceStateStore(config.stateDbPath);
+stateStore.pruneWebhooks(new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString());
 
 function json(res, status, body, headers = {}) {
   const payload = JSON.stringify(body);
@@ -91,9 +92,12 @@ async function requireOwnedLink(session, linkId) {
     throw error;
   }
   if (!link || link.external_id !== session.sub) throw Object.assign(new Error("not_found"), { status: 404 });
-  const current = linkReadiness.get(linkId) ?? {};
-  current.externalId = session.sub;
-  linkReadiness.set(linkId, current);
+  try {
+    stateStore.bindOwner(linkId, session.sub);
+  } catch (error) {
+    if (error?.code === "LINK_OWNER_CONFLICT") throw Object.assign(new Error("not_found"), { status: 404 });
+    throw error;
+  }
   return link;
 }
 
@@ -103,8 +107,17 @@ function remoteKey(req) {
 
 function historicalErrors(body) {
   return Array.isArray(body?.data?.errors)
-    ? body.data.errors.map((item) => String(item?.code ?? "unknown_error"))
+    ? body.data.errors.map((item) => String(item?.code ?? "unknown_error")).slice(0, 20)
     : [];
+}
+
+function effectiveWebhookOwner(linkId, externalId) {
+  const state = stateStore.get(linkId);
+  if (state?.externalId) {
+    if (externalId && externalId !== state.externalId) return null;
+    return state.externalId;
+  }
+  return isValidSessionSubject(externalId) ? externalId : null;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -150,17 +163,18 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && statusLinkId) {
       const session = requireSession(req, res);
       if (!session) return;
-      const state = linkReadiness.get(statusLinkId) ?? {};
+      const state = stateStore.get(statusLinkId);
       assertStateOwnership(session, state);
-      if (!state.deleted) await requireOwnedLink(session, statusLinkId);
-      const refreshed = linkReadiness.get(statusLinkId) ?? state;
+      if (!state?.deleted) await requireOwnedLink(session, statusLinkId);
+      const refreshed = stateStore.get(statusLinkId) ?? {};
       return json(res, 200, {
         linkId: statusLinkId,
         accountsReady: Boolean(refreshed.accountsReady),
         transactionsReady: Boolean(refreshed.transactionsReady),
         deletionPending: Boolean(refreshed.deletionPending),
         deleted: Boolean(refreshed.deleted),
-        lastError: refreshed.lastError ?? null,
+        accountsError: refreshed.accountsError ?? null,
+        transactionsError: refreshed.transactionsError ?? null,
         lastWebhookAt: refreshed.lastWebhookAt ?? null,
       });
     }
@@ -190,12 +204,7 @@ const server = http.createServer(async (req, res) => {
       const linkId = decodeURIComponent(deleteMatch[1]);
       await requireOwnedLink(session, linkId);
       const deletion = await belvo.deleteLink(linkId);
-      const current = linkReadiness.get(linkId) ?? {};
-      current.externalId = session.sub;
-      current.deletionPending = true;
-      current.deleted = false;
-      current.lastError = null;
-      linkReadiness.set(linkId, current);
+      stateStore.markDeletionPending(linkId, session.sub);
       return json(res, 202, { deletionRequested: true, requestId: deletion?.request_id ?? null });
     }
 
@@ -204,38 +213,26 @@ const server = http.createServer(async (req, res) => {
       if (!supplied || !safeEqual(supplied, config.webhookAuthToken)) return json(res, 404, { error: "not_found" });
       const body = await readJson(req);
       const webhookId = String(body.webhook_id ?? "");
-      if (webhookId && processedWebhookIds.has(webhookId)) return json(res, 202, { accepted: true, duplicate: true });
+      if (!webhookId || webhookId.length > 128) return json(res, 400, { error: "invalid_webhook_id" });
+      if (stateStore.hasWebhook(webhookId)) return json(res, 202, { accepted: true, duplicate: true });
 
       const linkId = String(body.link_id ?? "");
       const externalId = String(body.external_id ?? "");
       const webhookType = String(body.webhook_type ?? "").toUpperCase();
       const webhookCode = String(body.webhook_code ?? "");
       if (linkId && UUID_PATTERN.test(linkId)) {
-        const current = linkReadiness.get(linkId) ?? {};
-        if (isValidSessionSubject(externalId)) current.externalId = externalId;
+        const owner = effectiveWebhookOwner(linkId, externalId);
+        if (stateStore.get(linkId)?.externalId && !owner) {
+          return json(res, 202, { accepted: false, reason: "owner_mismatch" });
+        }
         const errors = historicalErrors(body);
         if (webhookCode === "link_deleted") {
-          current.deletionPending = false;
-          current.deleted = true;
-          current.accountsReady = false;
-          current.transactionsReady = false;
-          current.lastError = null;
+          stateStore.markDeleted(linkId, owner);
         } else if (webhookCode === "historical_update") {
-          if (errors.length) {
-            current.lastError = errors.join(",");
-          } else {
-            if (webhookType === "ACCOUNTS") current.accountsReady = true;
-            if (webhookType === "TRANSACTIONS") current.transactionsReady = true;
-            current.lastError = null;
-          }
+          stateStore.markHistorical(linkId, owner, webhookType, errors);
         }
-        current.lastWebhookAt = new Date().toISOString();
-        linkReadiness.set(linkId, current);
       }
-      if (webhookId) {
-        processedWebhookIds.add(webhookId);
-        if (processedWebhookIds.size > 10_000) processedWebhookIds.delete(processedWebhookIds.values().next().value);
-      }
+      stateStore.recordWebhook(webhookId);
       return json(res, 202, { accepted: true });
     }
 
@@ -257,6 +254,18 @@ const server = http.createServer(async (req, res) => {
 server.requestTimeout = 35_000;
 server.headersTimeout = 10_000;
 server.keepAliveTimeout = 5_000;
+
+function shutdown(signal) {
+  console.log(`Recebido ${signal}; encerrando backend.`);
+  server.close(() => {
+    stateStore.close();
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT", () => shutdown("SIGINT"));
 server.listen(config.port, "0.0.0.0", () => {
   console.log(`Gerenciamento de Gastos backend listening on :${config.port}`);
 });
