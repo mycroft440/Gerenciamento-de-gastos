@@ -75,6 +75,12 @@ function linkIdFrom(pathname, suffix) {
   return id && UUID_PATTERN.test(id) ? id : null;
 }
 
+function assertStateOwnership(session, state) {
+  if (state?.externalId && state.externalId !== session.sub) {
+    throw Object.assign(new Error("not_found"), { status: 404 });
+  }
+}
+
 async function requireOwnedLink(session, linkId) {
   if (!UUID_PATTERN.test(linkId)) throw Object.assign(new Error("not_found"), { status: 404 });
   let link;
@@ -84,9 +90,10 @@ async function requireOwnedLink(session, linkId) {
     if (error?.status === 404) throw Object.assign(new Error("not_found"), { status: 404 });
     throw error;
   }
-  if (!link || link.external_id !== session.sub) {
-    throw Object.assign(new Error("not_found"), { status: 404 });
-  }
+  if (!link || link.external_id !== session.sub) throw Object.assign(new Error("not_found"), { status: 404 });
+  const current = linkReadiness.get(linkId) ?? {};
+  current.externalId = session.sub;
+  linkReadiness.set(linkId, current);
   return link;
 }
 
@@ -95,7 +102,9 @@ function remoteKey(req) {
 }
 
 function historicalErrors(body) {
-  return Array.isArray(body?.data?.errors) ? body.data.errors.map((item) => String(item?.code ?? "unknown_error")) : [];
+  return Array.isArray(body?.data?.errors)
+    ? body.data.errors.map((item) => String(item?.code ?? "unknown_error"))
+    : [];
 }
 
 const server = http.createServer(async (req, res) => {
@@ -141,16 +150,18 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && statusLinkId) {
       const session = requireSession(req, res);
       if (!session) return;
-      await requireOwnedLink(session, statusLinkId);
       const state = linkReadiness.get(statusLinkId) ?? {};
+      assertStateOwnership(session, state);
+      if (!state.deleted) await requireOwnedLink(session, statusLinkId);
+      const refreshed = linkReadiness.get(statusLinkId) ?? state;
       return json(res, 200, {
         linkId: statusLinkId,
-        accountsReady: Boolean(state.accountsReady),
-        transactionsReady: Boolean(state.transactionsReady),
-        deletionPending: Boolean(state.deletionPending),
-        deleted: Boolean(state.deleted),
-        lastError: state.lastError ?? null,
-        lastWebhookAt: state.lastWebhookAt ?? null,
+        accountsReady: Boolean(refreshed.accountsReady),
+        transactionsReady: Boolean(refreshed.transactionsReady),
+        deletionPending: Boolean(refreshed.deletionPending),
+        deleted: Boolean(refreshed.deleted),
+        lastError: refreshed.lastError ?? null,
+        lastWebhookAt: refreshed.lastWebhookAt ?? null,
       });
     }
 
@@ -180,6 +191,7 @@ const server = http.createServer(async (req, res) => {
       await requireOwnedLink(session, linkId);
       const deletion = await belvo.deleteLink(linkId);
       const current = linkReadiness.get(linkId) ?? {};
+      current.externalId = session.sub;
       current.deletionPending = true;
       current.deleted = false;
       current.lastError = null;
@@ -189,18 +201,18 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/webhooks/belvo") {
       const supplied = bearer(req);
-      if (!supplied || !safeEqual(supplied, config.webhookAuthToken)) {
-        return json(res, 404, { error: "not_found" });
-      }
+      if (!supplied || !safeEqual(supplied, config.webhookAuthToken)) return json(res, 404, { error: "not_found" });
       const body = await readJson(req);
       const webhookId = String(body.webhook_id ?? "");
       if (webhookId && processedWebhookIds.has(webhookId)) return json(res, 202, { accepted: true, duplicate: true });
 
       const linkId = String(body.link_id ?? "");
+      const externalId = String(body.external_id ?? "");
       const webhookType = String(body.webhook_type ?? "").toUpperCase();
       const webhookCode = String(body.webhook_code ?? "");
       if (linkId && UUID_PATTERN.test(linkId)) {
         const current = linkReadiness.get(linkId) ?? {};
+        if (isValidSessionSubject(externalId)) current.externalId = externalId;
         const errors = historicalErrors(body);
         if (webhookCode === "link_deleted") {
           current.deletionPending = false;
