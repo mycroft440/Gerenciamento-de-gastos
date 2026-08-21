@@ -6,11 +6,11 @@ Revisão iniciada em agosto de 2026 sobre o MVP `Gerenciamento de Gastos`. O pro
 
 | Bloco | Status | Principais resultados |
 | --- | --- | --- |
-| Segurança / Open Finance | Aprovado para MVP pessoal | vínculo de sessão/link, webhook Bearer, rate limit, timeouts, minimização de dados, exclusão assíncrona e persistência técnica |
-| Backend / API | Aprovado para MVP pessoal | paginação segura, erros de upstream isolados, validação de datas, DTO mínimo e SQLite persistente |
-| Android / persistência | Aprovado para MVP pessoal | `BigDecimal`, vários bancos, filtro mensal, não mistura demo/real, moeda/status e cleanup de cliente/WebView |
-| UX / fluxos | Aprovado para MVP pessoal | linguagem de “Atualizar painel”, identificação das instituições, pendentes separados dos totais processados, sem promessa de tempo real e remoção segura |
-| Testes / CI | Aprovado | testes Node/JVM, syntax check, lint, Docker, debug e release otimizado |
+| Segurança / Open Finance | Aprovado para MVP pessoal | subject estável server-side, vínculo de sessão/link, webhook Bearer, rate limit, timeouts, minimização de dados, exclusão assíncrona e persistência técnica |
+| Backend / API | Aprovado para MVP pessoal | recuperação por `external_id`, paginação segura, erros de upstream isolados, validação de datas, DTO mínimo e SQLite persistente |
+| Android / persistência | Aprovado para MVP pessoal | `BigDecimal`, vários bancos, recuperação pós-reinstalação, filtro mensal, não mistura demo/real, moeda/status e cleanup de cliente/WebView |
+| UX / fluxos | Aprovado para MVP pessoal | linguagem de “Atualizar painel”, recuperação de conexões, identificação das instituições, pendentes separados dos totais processados, sem promessa de tempo real e remoção segura |
+| Testes / CI | Em validação final | testes Node/JVM, syntax check, lint, Docker, debug e release otimizado; head final ainda precisa ficar integralmente verde |
 | Produção / compliance | Aprovado com gates externos | limitações públicas transformadas em bloqueios explícitos; ver `PRODUCTION_CHECKLIST.md` |
 
 ## Problemas relevantes encontrados e corrigidos
@@ -41,7 +41,8 @@ Revisão iniciada em agosto de 2026 sobre o MVP `Gerenciamento de Gastos`. O pro
 24. conexões múltiplas eram exibidas apenas por UUID, permitindo remoção do banco errado;
 25. APIs Android deprecated geravam warnings no build do WebView/locale;
 26. build release não era exercitado pelo CI;
-27. transações `PENDING`, ainda não processadas pela instituição, alteravam saldo e categorias como se estivessem liquidadas.
+27. transações `PENDING`, ainda não processadas pela instituição, alteravam saldo e categorias como se estivessem liquidadas;
+28. `external_id` era gerado no aparelho e os `link.id` existiam apenas localmente, fazendo uma reinstalação perder a identidade/referência necessária para reencontrar conexões.
 
 ## Decisões deliberadas
 
@@ -52,6 +53,12 @@ O aplicativo mantém transações reais apenas em memória nesta versão. Isso r
 ### Pendentes não alteram os totais processados
 
 Transações `PENDING` continuam visíveis na lista, mas ficam fora do saldo líquido e das categorias processadas. O painel apresenta entradas e saídas pendentes em bloco separado até que a instituição as reporte como processadas.
+
+### Identidade pessoal é estável no servidor
+
+No modo pessoal, o backend exige um `PERSONAL_SUBJECT` aleatório, sem PII e estável. Esse subject vira o `external_id` dos links e o `sub` das sessões. O Android não escolhe esse valor.
+
+O botão **Atualizar painel** consulta a Belvo pelos links associados a esse `external_id` antes de carregar dados. Assim, uma instalação sem cache local consegue recuperar os `link.id` existentes após autenticação. Alterar o `PERSONAL_SUBJECT` equivale a criar outro perfil técnico e não deve ser usado como rotação comum.
 
 ### Autenticação permanece pessoal
 
