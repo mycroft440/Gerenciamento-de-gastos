@@ -8,3 +8,27 @@
 .externalNativeBuild/
 .cxx/
 app/build/
+
+# Segredos e configuração local
+.env
+.env.*
+!.env.example
+backend/.env
+local.properties
+
+# Estado local do Open Finance
+backend/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+
+# Chaves/certificados de assinatura privados
+*.jks
+*.keystore
+*.p12
+*.pfx
+
+# Artefatos locais de distribuição
+*.apk
+*.aab
