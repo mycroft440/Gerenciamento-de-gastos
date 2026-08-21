@@ -2,7 +2,7 @@ import http from "node:http";
 import crypto from "node:crypto";
 import { loadConfig } from "./config.mjs";
 import { BelvoClient, isValidCpf, normalizeCpf } from "./belvoClient.mjs";
-import { createSessionManager, isValidSessionSubject } from "./auth.mjs";
+import { createSessionManager } from "./auth.mjs";
 import { SlidingWindowRateLimiter } from "./rateLimit.mjs";
 import { OpenFinanceStateStore } from "./stateStore.mjs";
 import { toTransactionPage } from "./transactionView.mjs";
@@ -123,13 +123,22 @@ function effectiveWebhookOwner(linkId, externalId) {
     if (externalId && externalId !== state.externalId) return null;
     return state.externalId;
   }
-  return isValidSessionSubject(externalId) ? externalId : null;
+  return externalId === config.personalSubject ? config.personalSubject : null;
 }
 
 function validIsoDate(value) {
   if (!DATE_PATTERN.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00.000Z`);
   return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function linkView(link) {
+  if (!link || !UUID_PATTERN.test(String(link.id ?? "")) || link.external_id !== config.personalSubject) return null;
+  return {
+    id: String(link.id),
+    institution: typeof link.institution === "string" ? link.institution.slice(0, 160) : null,
+    status: typeof link.status === "string" ? link.status.slice(0, 32) : null,
+  };
 }
 
 const server = http.createServer(async (req, res) => {
@@ -152,12 +161,28 @@ const server = http.createServer(async (req, res) => {
         return json(res, 429, { error: "too_many_attempts" }, { "Retry-After": String(limit.retryAfterSeconds) });
       }
       const body = await readJson(req);
-      const externalId = String(body.externalId ?? "");
-      if (!isValidSessionSubject(externalId)) return json(res, 400, { error: "invalid_external_id" });
-      const token = sessions.issue(body.accessCode, externalId);
+      const token = sessions.issue(body.accessCode, config.personalSubject);
       if (!token) return json(res, 401, { error: "invalid_access_code" });
       authLimiter.reset(key);
       return json(res, 200, { token, expiresInSeconds: sessions.ttlSeconds });
+    }
+
+    if (req.method === "GET" && url.pathname === "/v1/open-finance/links") {
+      const session = requireSession(req, res);
+      if (!session) return;
+      const providerPage = await belvo.listLinksByExternalId(session.sub);
+      const links = [];
+      for (const raw of providerPage?.results ?? []) {
+        const view = linkView(raw);
+        if (!view || raw.external_id !== session.sub) continue;
+        try {
+          stateStore.bindOwner(view.id, session.sub);
+          links.push(view);
+        } catch (error) {
+          if (error?.code !== "LINK_OWNER_CONFLICT") throw error;
+        }
+      }
+      return json(res, 200, { count: links.length, links });
     }
 
     if (req.method === "POST" && url.pathname === "/v1/open-finance/widget-session") {
