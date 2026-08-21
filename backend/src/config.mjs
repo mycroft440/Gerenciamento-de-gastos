@@ -48,6 +48,16 @@ function statePath() {
   return value;
 }
 
+function deploymentMode() {
+  const value = process.env.DEPLOYMENT_MODE ?? "personal";
+  if (value !== "personal") {
+    throw new Error(
+      "DEPLOYMENT_MODE suporta somente 'personal'. Distribuição multiusuário exige autenticação individual antes de ser habilitada."
+    );
+  }
+  return value;
+}
+
 export function loadConfig() {
   const belvoBaseUrl = httpsUrl("BELVO_BASE_URL", "https://sandbox.belvo.com");
   const belvoHost = new URL(belvoBaseUrl).hostname;
@@ -64,6 +74,7 @@ export function loadConfig() {
   const staleDays = positiveInt("BELVO_STALE_DAYS", 90, 1, 365);
 
   return {
+    deploymentMode: deploymentMode(),
     port: positiveInt("PORT", 8080, 1, 65535),
     belvoBaseUrl,
     belvoSecretId: env("BELVO_SECRET_ID"),
