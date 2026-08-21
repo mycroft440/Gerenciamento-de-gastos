@@ -3,10 +3,11 @@ const CONSENT_PERMISSIONS = ["REGISTER", "ACCOUNTS", "CREDIT_CARDS", "CREDIT_OPE
 const FETCH_RESOURCES = ["ACCOUNTS", "TRANSACTIONS"];
 
 export class BelvoProviderError extends Error {
-  constructor(message, { status = 502, payload = null, cause = undefined } = {}) {
+  constructor(message, { providerStatus = 502, payload = null, cause = undefined } = {}) {
     super(message, { cause });
     this.name = "BelvoProviderError";
-    this.status = status;
+    this.status = 502;
+    this.providerStatus = providerStatus;
     this.payload = payload;
     this.isProviderError = true;
   }
@@ -50,7 +51,7 @@ export class BelvoClient {
     const payload = parsePayload(text);
     if (!response.ok) {
       throw new BelvoProviderError(`Belvo respondeu ${response.status}`, {
-        status: response.status,
+        providerStatus: response.status,
         payload,
       });
     }
@@ -106,8 +107,13 @@ export class BelvoClient {
     return { widgetUrl: `https://widget.belvo.io/?${params.toString()}`, expiresInSeconds: 600 };
   }
 
-  getLink(linkId) {
-    return this.request(`/api/links/${encodeURIComponent(linkId)}/`);
+  async getLink(linkId) {
+    try {
+      return await this.request(`/api/links/${encodeURIComponent(linkId)}/`);
+    } catch (error) {
+      if (error?.isProviderError && error.providerStatus === 404) return null;
+      throw error;
+    }
   }
 
   async listAll(path, maxPages = 100) {
