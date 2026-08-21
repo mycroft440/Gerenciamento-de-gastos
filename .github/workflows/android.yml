@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend-test:
     runs-on: ubuntu-latest
@@ -21,11 +25,24 @@ jobs:
       - name: Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "22.16.0"
+
+      - name: Syntax check
+        run: find backend/src backend/test -name '*.mjs' -print0 | xargs -0 -n1 node --check
 
       - name: Backend tests
         working-directory: backend
         run: npm test
+
+  backend-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build backend container
+        run: docker build --pull -t gerenciamento-gastos-backend:ci backend
 
   android-build:
     runs-on: ubuntu-latest
@@ -51,8 +68,16 @@ jobs:
         with:
           gradle-version: "9.5.0"
 
-      - name: Unit tests and debug APK
-        run: gradle test :app:assembleDebug --stacktrace
+      - name: Unit tests, lint and debug APK
+        run: gradle test :app:lintDebug :app:assembleDebug --stacktrace
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-lint-report
+          path: app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore
 
       - name: Upload debug APK
         if: success()
