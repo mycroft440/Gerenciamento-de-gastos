@@ -4,6 +4,7 @@ import br.com.gerenciamentogastos.model.FinancialInstitution
 import br.com.gerenciamentogastos.model.FinancialSummary
 import br.com.gerenciamentogastos.model.FinanceTransaction
 import br.com.gerenciamentogastos.model.TransactionType
+import java.math.BigDecimal
 
 class FinanceRepository(
     private val gateway: OpenFinanceGateway = DemoOpenFinanceGateway()
@@ -14,12 +15,19 @@ class FinanceRepository(
     fun institutions(): List<FinancialInstitution> = gateway.availableInstitutions()
 
     fun summary(transactions: List<FinanceTransaction> = transactions()): FinancialSummary {
-        val income = transactions
+        val brl = transactions.filter { it.currency == "BRL" }
+        val income = brl
+            .asSequence()
             .filter { it.type == TransactionType.INCOME }
-            .sumOf { it.amount }
-        val expenses = transactions
+            .fold(BigDecimal.ZERO) { total, item -> total.add(item.amount) }
+        val expenses = brl
+            .asSequence()
             .filter { it.type == TransactionType.EXPENSE }
-            .sumOf { it.amount }
-        return FinancialSummary(income = income, expenses = expenses)
+            .fold(BigDecimal.ZERO) { total, item -> total.add(item.amount) }
+        return FinancialSummary(
+            income = income,
+            expenses = expenses,
+            excludedForeignTransactions = transactions.count { it.currency != "BRL" }
+        )
     }
 }

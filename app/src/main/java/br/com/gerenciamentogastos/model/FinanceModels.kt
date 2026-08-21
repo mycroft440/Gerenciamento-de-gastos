@@ -1,10 +1,17 @@
 package br.com.gerenciamentogastos.model
 
+import java.math.BigDecimal
 import java.time.LocalDate
 
 enum class TransactionType {
     INCOME,
     EXPENSE
+}
+
+enum class TransactionStatus {
+    PENDING,
+    PROCESSED,
+    UNKNOWN
 }
 
 enum class Category(val label: String, val symbol: String) {
@@ -22,11 +29,13 @@ enum class Category(val label: String, val symbol: String) {
 data class FinanceTransaction(
     val id: String,
     val description: String,
-    val amount: Double,
+    val amount: BigDecimal,
+    val currency: String,
     val type: TransactionType,
     val category: Category,
     val date: LocalDate,
-    val source: String
+    val source: String,
+    val status: TransactionStatus = TransactionStatus.UNKNOWN
 )
 
 data class FinancialInstitution(
@@ -36,8 +45,10 @@ data class FinancialInstitution(
 )
 
 data class FinancialSummary(
-    val income: Double,
-    val expenses: Double
+    val income: BigDecimal,
+    val expenses: BigDecimal,
+    val excludedForeignTransactions: Int = 0
 ) {
-    val balance: Double = income - expenses
+    val balance: BigDecimal
+        get() = income.subtract(expenses)
 }
