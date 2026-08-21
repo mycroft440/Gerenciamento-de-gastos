@@ -72,8 +72,8 @@ jobs:
         with:
           gradle-version: "9.5.0"
 
-      - name: Unit tests, lint and debug APK
-        run: gradle test :app:lintDebug :app:assembleDebug --stacktrace
+      - name: Unit tests, lint, debug and release builds
+        run: gradle test :app:lintDebug :app:assembleDebug :app:assembleRelease --stacktrace
 
       - name: Upload lint report
         if: always()
