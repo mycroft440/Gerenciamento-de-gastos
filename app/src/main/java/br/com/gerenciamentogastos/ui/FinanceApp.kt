@@ -191,7 +191,11 @@ private fun DashboardScreen(
 ) {
     val expensesByCategory = remember(transactions) {
         transactions
-            .filter { it.type == TransactionType.EXPENSE && it.currency == "BRL" }
+            .filter {
+                it.type == TransactionType.EXPENSE &&
+                    it.currency == "BRL" &&
+                    it.status != TransactionStatus.PENDING
+            }
             .groupBy { it.category }
             .mapValues { (_, items) ->
                 items.fold(BigDecimal.ZERO) { total, item -> total.add(item.amount) }
@@ -236,6 +240,10 @@ private fun DashboardScreen(
 
         item { BalanceCard(summary) }
 
+        if (summary.pendingTransactions > 0) {
+            item { PendingTransactionsCard(summary) }
+        }
+
         if (summary.excludedForeignTransactions > 0) {
             item {
                 Text(
@@ -247,11 +255,11 @@ private fun DashboardScreen(
         }
 
         item {
-            Text("Gastos por categoria", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("Gastos processados por categoria", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         }
 
         if (expensesByCategory.isEmpty()) {
-            item { Text("Nenhum gasto em BRL neste mês.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            item { Text("Nenhum gasto processado em BRL neste mês.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         } else {
             items(expensesByCategory) { (category, amount) ->
                 CategoryRow(category, amount, summary.expenses)
@@ -286,11 +294,29 @@ private fun BalanceCard(summary: FinancialSummary) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Saldo do período", style = MaterialTheme.typography.labelLarge)
+            Text("Saldo líquido processado", style = MaterialTheme.typography.labelLarge)
             Text(brlFormat.format(summary.balance), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 SummaryMetric("Entradas", summary.income)
                 SummaryMetric("Saídas", summary.expenses)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PendingTransactionsCard(summary: FinancialSummary) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Movimentações pendentes", fontWeight = FontWeight.SemiBold)
+            Text(
+                "${summary.pendingTransactions} movimentação(ões) ainda não processada(s) pela instituição e, por isso, fora dos totais acima.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                SummaryMetric("Entradas pendentes", summary.pendingIncome)
+                SummaryMetric("Saídas pendentes", summary.pendingExpenses)
             }
         }
     }
