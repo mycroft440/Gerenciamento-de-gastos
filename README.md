@@ -16,6 +16,8 @@ O projeto contém:
 - pesquisa e filtro de transações;
 - suporte a várias conexões Open Finance;
 - identificação da instituição antes de permitir remoção de uma conexão;
+- recuperação de conexões após reinstalação usando um `PERSONAL_SUBJECT` estável no backend;
+- reconciliação dos `link.id` locais com os links associados ao `external_id` na Belvo;
 - consolidação das movimentações das conexões carregadas;
 - tratamento explícito de moedas estrangeiras e transações pendentes;
 - modo demonstrativo apenas quando não existe conexão real salva;
@@ -31,6 +33,14 @@ O projeto contém:
 - CI com testes, lint, build do container, APK debug e build release otimizado.
 
 > Nome e CPF não são persistidos pelo backend desta versão. As transações reais também não são cacheadas de forma persistente no Android: ficam em memória e precisam ser carregadas novamente após reabrir o app.
+
+## Identidade pessoal estável
+
+No modo pessoal, o `external_id` não é mais criado no aparelho. O servidor exige `PERSONAL_SUBJECT`, um identificador técnico aleatório, sem PII, gerado uma vez e preservado durante a vida das conexões Open Finance.
+
+Isso permite que o backend consulte `/api/links/?external_id=...` na Belvo e reencontre links que não estejam mais no armazenamento local, inclusive após reinstalação do aplicativo. **Trocar `PERSONAL_SUBJECT` enquanto existirem links faz o novo perfil deixar de encontrá-los.**
+
+O app remove automaticamente o antigo `external_id` gerado localmente por versões anteriores; a identidade de autorização passa a existir somente no backend.
 
 ## Stack
 
@@ -61,7 +71,9 @@ Android
              │
              ▼
      Backend HTTPS próprio
-       ├── sessão curta vinculada ao external_id
+       ├── PERSONAL_SUBJECT estável
+       ├── sessão curta vinculada ao subject pessoal
+       ├── recuperação/reconciliação de links
        ├── criação do Widget Access Token
        ├── validação de propriedade dos links
        ├── DTO mínimo de transações
@@ -83,7 +95,9 @@ Os totais mensais e as categorias consideram transações em BRL que já não es
 
 ## Atualização dos dados
 
-O botão **Atualizar painel** consulta o que já está disponível no provedor; ele não promete nem força coleta bancária em tempo real. A frequência de atualização de links recorrentes depende da configuração contratada com a Belvo. A carga histórica inicial pode abranger até aproximadamente 365 dias conforme o recurso/instituição.
+O botão **Atualizar painel** primeiro recupera/reconcilia as conexões ligadas ao `PERSONAL_SUBJECT` e depois consulta o que já está disponível no provedor. Ele não promete nem força coleta bancária em tempo real. A frequência de atualização de links recorrentes depende da configuração contratada com a Belvo. A carga histórica inicial pode abranger até aproximadamente 365 dias conforme o recurso/instituição.
+
+Se o armazenamento local estiver vazio após uma reinstalação, o mesmo botão aparece como **Recuperar conexões e atualizar**; após informar o código pessoal do backend, ele repovoa os `link.id` locais a partir do servidor.
 
 ## Build e CI
 
