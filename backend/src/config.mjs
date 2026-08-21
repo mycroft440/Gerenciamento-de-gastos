@@ -10,6 +10,14 @@ function secret(name, minimumLength) {
   return value;
 }
 
+function stableSubject(name) {
+  const value = env(name);
+  if (!/^[A-Za-z0-9_-]{16,128}$/.test(value)) {
+    throw new Error(`${name} deve ter entre 16 e 128 caracteres e usar apenas letras, números, _ ou -`);
+  }
+  return value;
+}
+
 function httpsUrl(name, fallback) {
   const raw = env(name, fallback);
   let parsed;
@@ -75,6 +83,7 @@ export function loadConfig() {
 
   return {
     deploymentMode: deploymentMode(),
+    personalSubject: stableSubject("PERSONAL_SUBJECT"),
     port: positiveInt("PORT", 8080, 1, 65535),
     belvoBaseUrl,
     belvoSecretId: env("BELVO_SECRET_ID"),
