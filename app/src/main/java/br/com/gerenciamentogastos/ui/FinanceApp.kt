@@ -474,7 +474,6 @@ private fun AccountsScreen(
     onTransactionsLoaded: (List<FinanceTransaction>) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val externalId = remember { localStore.externalId() }
     var accessCode by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var cpf by remember { mutableStateOf("") }
@@ -483,8 +482,10 @@ private fun AccountsScreen(
     var lastProviderEvent by remember { mutableStateOf<String?>(null) }
     var status by remember {
         mutableStateOf(
-            if (connectedLinkIds.isEmpty()) "Nenhum banco conectado."
-            else "${connectedLinkIds.size} conexão(ões) salva(s). Atualize o painel para carregar os dados disponíveis."
+            if (connectedLinkIds.isEmpty())
+                "Nenhuma conexão salva neste aparelho. Use Atualizar painel para recuperar conexões existentes."
+            else
+                "${connectedLinkIds.size} conexão(ões) salva(s). Atualize o painel para carregar os dados disponíveis."
         )
     }
     var busy by remember { mutableStateOf(false) }
@@ -496,7 +497,7 @@ private fun AccountsScreen(
             return
         }
         busy = true
-        client.authenticate(accessCode, externalId) { authResult ->
+        client.authenticate(accessCode) { authResult ->
             authResult.onSuccess(action).onFailure {
                 busy = false
                 status = "Não foi possível autenticar: ${it.message ?: "erro desconhecido"}"
@@ -574,9 +575,8 @@ private fun AccountsScreen(
     }
 
     fun refreshDashboard() {
-        val ids = connectedLinkIds.toList()
-        if (ids.isEmpty()) {
-            status = "Conecte uma instituição primeiro."
+        if (!client.isConfigured()) {
+            status = "Defina BACKEND_BASE_URL no build para habilitar o Open Finance."
             return
         }
         authenticateThen { token ->
@@ -601,11 +601,12 @@ private fun AccountsScreen(
                     loadedAny && notes.isEmpty() -> "Painel atualizado: ${collected.distinctBy { it.id }.size} movimentações consolidadas."
                     loadedAny -> "Painel atualizado parcialmente. ${notes.joinToString(" ")}"
                     notes.isNotEmpty() -> notes.joinToString(" ")
+                    currentLinks.isEmpty() -> "Nenhuma conexão Open Finance foi encontrada para este perfil pessoal."
                     else -> "Nenhum dado disponível foi carregado."
                 }
             }
 
-            fun loadIndex(index: Int) {
+            fun loadIndex(ids: List<String>, index: Int) {
                 if (index >= ids.size) {
                     finish()
                     return
@@ -619,22 +620,22 @@ private fun AccountsScreen(
                             readiness.deleted -> {
                                 localStore.removeLink(id)
                                 notes += "Uma conexão removida pela instituição foi apagada localmente."
-                                loadIndex(index + 1)
+                                loadIndex(ids, index + 1)
                             }
 
                             readiness.deletionPending -> {
                                 notes += "Uma conexão ainda aguarda confirmação de remoção."
-                                loadIndex(index + 1)
+                                loadIndex(ids, index + 1)
                             }
 
                             readiness.transactionsError != null -> {
                                 notes += "Uma instituição informou erro ao preparar transações."
-                                loadIndex(index + 1)
+                                loadIndex(ids, index + 1)
                             }
 
                             !readiness.transactionsReady -> {
                                 notes += "O histórico de uma instituição ainda está sendo preparado."
-                                loadIndex(index + 1)
+                                loadIndex(ids, index + 1)
                             }
 
                             else -> client.transactions(token, id) { transactionsResult ->
@@ -644,17 +645,40 @@ private fun AccountsScreen(
                                 }.onFailure {
                                     notes += "Falha ao carregar uma das conexões."
                                 }
-                                loadIndex(index + 1)
+                                loadIndex(ids, index + 1)
                             }
                         }
                     }.onFailure {
                         notes += "Não foi possível verificar uma das conexões."
-                        loadIndex(index + 1)
+                        loadIndex(ids, index + 1)
                     }
                 }
             }
 
-            loadIndex(0)
+            client.links(token) { linksResult ->
+                linksResult.onSuccess { discovered ->
+                    val recovered = localStore.replaceLinks(
+                        discovered.map { it.id to institutionLabel(it.institution) }
+                    )
+                    if (recovered != connectedLinkIds) onLinksChanged(recovered)
+                    if (recovered.isEmpty()) {
+                        busy = false
+                        lastProviderEvent = null
+                        status = "Nenhuma conexão Open Finance foi encontrada para este perfil pessoal."
+                    } else {
+                        loadIndex(recovered.sorted(), 0)
+                    }
+                }.onFailure {
+                    val localIds = localStore.linkIds().sorted()
+                    if (localIds.isEmpty()) {
+                        busy = false
+                        status = "Não foi possível recuperar as conexões do servidor. Tente novamente."
+                    } else {
+                        notes += "Não foi possível reconciliar a lista de conexões; usando as referências locais desta instalação."
+                        loadIndex(localIds, 0)
+                    }
+                }
+            }
         }
     }
 
@@ -699,7 +723,7 @@ private fun AccountsScreen(
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("Como a atualização funciona", fontWeight = FontWeight.SemiBold)
                         Text(
-                            "Atualizar painel apenas lê os dados que o provedor Open Finance já disponibilizou. Isso não força uma coleta nova no banco e não deve ser interpretado como tempo real.",
+                            "Atualizar painel recupera as conexões deste perfil pessoal e lê os dados que o provedor Open Finance já disponibilizou. Isso não força uma coleta nova no banco e não deve ser interpretado como tempo real.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -756,9 +780,16 @@ private fun AccountsScreen(
                     }
                 }
             }
+        }
+
+        if (client.isConfigured()) {
             item {
                 Button(onClick = ::refreshDashboard, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (busy) "Atualizando…" else "Atualizar painel")
+                    Text(
+                        if (busy) "Atualizando…"
+                        else if (connectedLinkIds.isEmpty()) "Recuperar conexões e atualizar"
+                        else "Atualizar painel"
+                    )
                 }
             }
         }
