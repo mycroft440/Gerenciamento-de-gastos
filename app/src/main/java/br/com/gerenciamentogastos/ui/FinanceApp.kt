@@ -33,6 +33,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -323,39 +324,75 @@ private fun AccountsScreen(
     var name by remember { mutableStateOf("") }
     var cpf by remember { mutableStateOf("") }
     var linkId by remember { mutableStateOf(prefs.getString("belvo_link_id", null)) }
+    var pendingLinkId by remember { mutableStateOf<String?>(null) }
     var widgetUrl by remember { mutableStateOf<String?>(null) }
-    var status by remember { mutableStateOf(if (linkId == null) "Nenhum banco conectado." else "Banco conectado. Sincronize para buscar os dados.") }
+    var status by remember {
+        mutableStateOf(if (linkId == null) "Nenhum banco conectado." else "Banco conectado. Sincronize para buscar os dados.")
+    }
     var busy by remember { mutableStateOf(false) }
+
+    fun clearLocalLink(message: String) {
+        prefs.edit().remove("belvo_link_id").apply()
+        linkId = null
+        pendingLinkId = null
+        onDisconnected()
+        status = message
+    }
 
     fun persistLink(id: String) {
         linkId = id
+        pendingLinkId = null
         prefs.edit().putString("belvo_link_id", id).apply()
-        status = "Consentimento concluído. Aguarde a preparação do histórico e toque em Sincronizar."
-    }
-
-    LaunchedEffect(callbackUri) {
-        if (callbackUri?.scheme == "gerenciamentogastos") {
-            when (callbackUri.host) {
-                "success" -> callbackUri.getQueryParameter("link")?.let(::persistLink)
-                "exit" -> status = "Conexão cancelada antes da conclusão."
-                "error" -> status = "A instituição retornou um erro durante a conexão."
-            }
-            onCallbackHandled()
-        }
+        status = "Consentimento confirmado. Aguarde a preparação do histórico e toque em Sincronizar."
     }
 
     fun authenticateThen(action: (String) -> Unit) {
         if (accessCode.isBlank()) {
+            busy = false
             status = "Informe o código de acesso do backend."
             return
         }
         busy = true
-        client.authenticate(accessCode) { authResult ->
+        client.authenticate(accessCode, externalId) { authResult ->
             authResult.onSuccess { token -> action(token) }
                 .onFailure {
                     busy = false
                     status = "Não foi possível autenticar: ${it.message ?: "erro desconhecido"}"
                 }
+        }
+    }
+
+    fun confirmLink(candidateId: String) {
+        pendingLinkId = candidateId
+        authenticateThen { token ->
+            client.linkStatus(token, candidateId) { result ->
+                busy = false
+                result.onSuccess { readiness ->
+                    if (readiness.deleted) {
+                        pendingLinkId = null
+                        status = "A conexão informada já foi removida."
+                    } else {
+                        persistLink(candidateId)
+                    }
+                }.onFailure {
+                    status = "O retorno do banco não pôde ser validado. A conexão não foi salva."
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(callbackUri) {
+        if (callbackUri?.scheme == "gerenciamentogastos") {
+            when (callbackUri.host) {
+                "success" -> {
+                    val candidate = callbackUri.getQueryParameter("link")
+                    if (candidate.isNullOrBlank()) status = "Retorno do banco sem identificador de conexão."
+                    else confirmLink(candidate)
+                }
+                "exit" -> status = "Conexão cancelada antes da conclusão."
+                "error" -> status = "A instituição retornou um erro durante a conexão."
+            }
+            onCallbackHandled()
         }
     }
 
@@ -369,7 +406,7 @@ private fun AccountsScreen(
             return
         }
         authenticateThen { token ->
-            client.createWidgetSession(token, name.trim(), cpf, externalId) { result ->
+            client.createWidgetSession(token, name.trim(), cpf) { result ->
                 busy = false
                 result.onSuccess {
                     widgetUrl = it
@@ -390,11 +427,24 @@ private fun AccountsScreen(
         authenticateThen { token ->
             client.linkStatus(token, currentLink) { statusResult ->
                 statusResult.onSuccess { readiness ->
-                    if (!readiness.transactionsReady) {
-                        busy = false
-                        status = "O histórico de transações ainda está sendo preparado pela instituição. Tente sincronizar novamente depois."
-                    } else {
-                        client.transactions(token, currentLink) { transactionsResult ->
+                    when {
+                        readiness.deleted -> {
+                            busy = false
+                            clearLocalLink("A instituição confirmou a remoção da conexão.")
+                        }
+                        readiness.deletionPending -> {
+                            busy = false
+                            status = "A remoção foi solicitada e ainda aguarda confirmação da Belvo."
+                        }
+                        readiness.lastError != null -> {
+                            busy = false
+                            status = "A instituição não conseguiu preparar todos os dados (${readiness.lastError}). Tente novamente depois."
+                        }
+                        !readiness.transactionsReady -> {
+                            busy = false
+                            status = "O histórico de transações ainda está sendo preparado pela instituição. Tente sincronizar novamente depois."
+                        }
+                        else -> client.transactions(token, currentLink) { transactionsResult ->
                             busy = false
                             transactionsResult.onSuccess { transactions ->
                                 onTransactionsLoaded(transactions)
@@ -418,12 +468,10 @@ private fun AccountsScreen(
             client.deleteLink(token, currentLink) { result ->
                 busy = false
                 result.onSuccess {
-                    prefs.edit().remove("belvo_link_id").apply()
-                    linkId = null
                     onDisconnected()
-                    status = "Conexão removida."
+                    status = "Remoção solicitada. O link será mantido localmente até a Belvo confirmar a exclusão; use Sincronizar / verificar."
                 }.onFailure {
-                    status = "Falha ao remover a conexão: ${it.message ?: "erro desconhecido"}"
+                    status = "Falha ao solicitar a remoção: ${it.message ?: "erro desconhecido"}"
                 }
             }
         }
@@ -463,6 +511,21 @@ private fun AccountsScreen(
         }
 
         if (linkId == null) {
+            if (pendingLinkId != null) {
+                item {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Retorno bancário pendente", fontWeight = FontWeight.SemiBold)
+                            Text("Confirme o código de acesso para validar que esta conexão realmente pertence a este app.")
+                            Button(
+                                onClick = { pendingLinkId?.let(::confirmLink) },
+                                enabled = !busy,
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Confirmar conexão") }
+                        }
+                    }
+                }
+            }
             item {
                 OutlinedTextField(
                     value = name,
@@ -493,7 +556,7 @@ private fun AccountsScreen(
                         Text("Conexão Open Finance", fontWeight = FontWeight.SemiBold)
                         Text("Link: ${linkId?.take(8)}…", style = MaterialTheme.typography.bodySmall)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = ::sync, enabled = !busy) { Text("Sincronizar") }
+                            Button(onClick = ::sync, enabled = !busy) { Text("Sincronizar / verificar") }
                             OutlinedButton(onClick = ::disconnect, enabled = !busy) { Text("Desconectar") }
                         }
                     }
@@ -513,7 +576,7 @@ private fun AccountsScreen(
             url = url,
             onSuccess = { id ->
                 widgetUrl = null
-                persistLink(id)
+                confirmLink(id)
             },
             onExit = { message ->
                 widgetUrl = null
@@ -530,6 +593,21 @@ private fun BelvoWidgetDialog(
     onExit: (String) -> Unit
 ) {
     val context = LocalContext.current
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            webViewRef?.apply {
+                stopLoading()
+                webViewClient = WebViewClient()
+                loadUrl("about:blank")
+                clearHistory()
+                removeAllViews()
+                destroy()
+            }
+            webViewRef = null
+        }
+    }
 
     Dialog(onDismissRequest = { onExit("Conexão fechada antes da conclusão.") }) {
         Surface(
@@ -539,12 +617,24 @@ private fun BelvoWidgetDialog(
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = {
+                    val initial = runCatching { Uri.parse(url) }.getOrNull()
+                    if (initial?.scheme != "https" || initial.host != "widget.belvo.io") {
+                        onExit("URL do ambiente de consentimento inválida.")
+                    }
                     WebView(context).apply {
+                        webViewRef = this
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
                         settings.allowFileAccess = false
                         settings.allowContentAccess = false
+                        settings.allowFileAccessFromFileURLs = false
+                        settings.allowUniversalAccessFromFileURLs = false
+                        settings.javaScriptCanOpenWindowsAutomatically = false
+                        settings.setSupportMultipleWindows(false)
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                            settings.safeBrowsingEnabled = true
+                        }
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                                 val uri = request?.url ?: return false
@@ -556,25 +646,30 @@ private fun BelvoWidgetDialog(
                                     }
                                     return true
                                 }
-                                if (uri.scheme != "http" && uri.scheme != "https") {
-                                    runCatching {
-                                        val intent = if (uri.toString().startsWith("intent://")) {
-                                            Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
-                                        } else {
-                                            Intent(Intent.ACTION_VIEW, uri)
-                                        }
-                                        context.startActivity(intent)
+                                if (uri.scheme == "http") return true
+                                if (uri.scheme == "https") return false
+                                runCatching {
+                                    val intent = if (uri.toString().startsWith("intent://")) {
+                                        Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
+                                    } else {
+                                        Intent(Intent.ACTION_VIEW, uri)
                                     }
-                                    return true
+                                    intent.addCategory(Intent.CATEGORY_BROWSABLE)
+                                    intent.component = null
+                                    intent.selector = null
+                                    context.startActivity(intent)
                                 }
-                                return false
+                                return true
                             }
                         }
-                        loadUrl(url)
+                        if (initial?.scheme == "https" && initial.host == "widget.belvo.io") loadUrl(url)
                     }
                 },
                 update = { webView ->
-                    if (webView.url.isNullOrBlank()) webView.loadUrl(url)
+                    if (webView.url.isNullOrBlank()) {
+                        val parsed = Uri.parse(url)
+                        if (parsed.scheme == "https" && parsed.host == "widget.belvo.io") webView.loadUrl(url)
+                    }
                 }
             )
         }
