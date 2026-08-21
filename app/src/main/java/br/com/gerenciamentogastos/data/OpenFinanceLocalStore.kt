@@ -1,14 +1,15 @@
 package br.com.gerenciamentogastos.data
 
 import android.content.Context
-import java.util.UUID
 
 class OpenFinanceLocalStore(context: Context) {
     private val prefs = context.getSharedPreferences("open_finance", Context.MODE_PRIVATE)
 
-    fun externalId(): String {
-        return prefs.getString(KEY_EXTERNAL_ID, null) ?: UUID.randomUUID().toString().also {
-            prefs.edit().putString(KEY_EXTERNAL_ID, it).apply()
+    init {
+        // Versões antigas geravam um external_id no aparelho. A identidade pessoal
+        // agora é estável e controlada exclusivamente pelo backend.
+        if (prefs.contains(KEY_LEGACY_EXTERNAL_ID)) {
+            prefs.edit().remove(KEY_LEGACY_EXTERNAL_ID).apply()
         }
     }
 
@@ -23,6 +24,18 @@ class OpenFinanceLocalStore(context: Context) {
         label?.takeIf { it.isNotBlank() }?.let { editor.putString(labelKey(linkId), it.take(80)) }
         editor.apply()
         return updated
+    }
+
+    fun replaceLinks(links: Collection<Pair<String, String?>>): Set<String> {
+        val ids = links.map { it.first }.toSet()
+        val previous = linkIds()
+        val editor = prefs.edit().putStringSet(KEY_LINK_IDS, ids)
+        for (removed in previous - ids) editor.remove(labelKey(removed))
+        for ((id, label) in links) {
+            label?.takeIf { it.isNotBlank() }?.let { editor.putString(labelKey(id), it.take(80)) }
+        }
+        editor.apply()
+        return ids
     }
 
     fun setLinkLabel(linkId: String, label: String) {
@@ -57,7 +70,7 @@ class OpenFinanceLocalStore(context: Context) {
     private fun labelKey(linkId: String) = "$KEY_LINK_LABEL_PREFIX$linkId"
 
     private companion object {
-        const val KEY_EXTERNAL_ID = "external_id"
+        const val KEY_LEGACY_EXTERNAL_ID = "external_id"
         const val KEY_LINK_IDS = "belvo_link_ids"
         const val KEY_LEGACY_LINK_ID = "belvo_link_id"
         const val KEY_MIGRATED = "multi_link_migrated"
