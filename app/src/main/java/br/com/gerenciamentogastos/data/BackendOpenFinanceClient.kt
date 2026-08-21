@@ -23,7 +23,10 @@ class BackendOpenFinanceClient(
         val deleted: Boolean,
         val accountsError: String?,
         val transactionsError: String?
-    )
+    ) {
+        val lastError: String?
+            get() = transactionsError
+    }
 
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
