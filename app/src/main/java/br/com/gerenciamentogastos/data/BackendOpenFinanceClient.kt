@@ -4,18 +4,21 @@ import android.os.Handler
 import android.os.Looper
 import br.com.gerenciamentogastos.BuildConfig
 import br.com.gerenciamentogastos.model.FinanceTransaction
+import br.com.gerenciamentogastos.model.TransactionStatus
 import br.com.gerenciamentogastos.model.TransactionType
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
+import java.math.BigDecimal
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.LocalDate
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class BackendOpenFinanceClient(
     private val baseUrl: String = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
-) {
+) : AutoCloseable {
     data class LinkStatus(
         val accountsReady: Boolean,
         val transactionsReady: Boolean,
@@ -30,6 +33,7 @@ class BackendOpenFinanceClient(
 
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val closed = AtomicBoolean(false)
 
     fun isConfigured(): Boolean = runCatching {
         val url = URL(baseUrl)
@@ -113,25 +117,33 @@ class BackendOpenFinanceClient(
                     "OUTFLOW" -> TransactionType.EXPENSE
                     else -> continue
                 }
-                val amount = item.optDouble("amount", Double.NaN)
-                if (!amount.isFinite() || amount < 0.0) continue
+                val amount = runCatching { BigDecimal(item.get("amount").toString()) }.getOrNull() ?: continue
+                if (amount.signum() < 0) continue
+                val currency = item.optString("currency").takeIf { it.matches(Regex("^[A-Z]{3}$")) } ?: "BRL"
                 val description = item.optString("description").ifBlank { "Movimentação bancária" }
                 val date = runCatching { LocalDate.parse(item.getString("value_date")) }.getOrNull() ?: continue
                 val source = item.optString("source").takeIf { it.isNotBlank() } ?: "Open Finance"
+                val transactionStatus = when (item.optString("status")) {
+                    "PENDING" -> TransactionStatus.PENDING
+                    "PROCESSED" -> TransactionStatus.PROCESSED
+                    else -> TransactionStatus.UNKNOWN
+                }
 
                 add(
                     FinanceTransaction(
                         id = item.optString("id", "belvo-$index-$date"),
                         description = description,
                         amount = amount,
+                        currency = currency,
                         type = type,
                         category = TransactionCategorizer.categorize(description, type),
                         date = date,
-                        source = source
+                        source = source,
+                        status = transactionStatus
                     )
                 )
             }
-        }.sortedByDescending { it.date }
+        }.distinctBy { it.id }.sortedByDescending { it.date }
     }
 
     fun deleteLink(
@@ -147,15 +159,26 @@ class BackendOpenFinanceClient(
         Unit
     }
 
+    override fun close() {
+        if (closed.compareAndSet(false, true)) {
+            executor.shutdownNow()
+            mainHandler.removeCallbacksAndMessages(null)
+        }
+    }
+
     private fun nullableString(json: JSONObject, key: String): String? =
         json.optString(key).takeIf { it.isNotBlank() && it != "null" }
 
     private fun encodePath(value: String): String = java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
 
     private fun <T> runAsync(callback: (Result<T>) -> Unit, block: () -> T) {
+        if (closed.get()) {
+            callback(Result.failure(IllegalStateException("Cliente Open Finance encerrado.")))
+            return
+        }
         executor.execute {
             val result = runCatching(block)
-            mainHandler.post { callback(result) }
+            if (!closed.get()) mainHandler.post { if (!closed.get()) callback(result) }
         }
     }
 
