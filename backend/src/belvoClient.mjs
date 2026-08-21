@@ -138,6 +138,11 @@ export class BelvoClient {
     return { count: results.length, next: null, previous: null, results };
   }
 
+  listLinksByExternalId(externalId) {
+    const params = new URLSearchParams({ external_id: externalId, page_size: "100" });
+    return this.listAll(`/api/links/?${params.toString()}`);
+  }
+
   listAccounts(linkId) {
     return this.listAll(`/api/accounts/?link=${encodeURIComponent(linkId)}&page_size=1000`);
   }
