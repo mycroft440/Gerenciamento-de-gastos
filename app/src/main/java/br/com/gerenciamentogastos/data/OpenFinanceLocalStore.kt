@@ -17,15 +17,29 @@ class OpenFinanceLocalStore(context: Context) {
         return prefs.getStringSet(KEY_LINK_IDS, emptySet())?.toSet().orEmpty()
     }
 
-    fun addLink(linkId: String): Set<String> {
+    fun addLink(linkId: String, label: String? = null): Set<String> {
         val updated = linkIds() + linkId
-        prefs.edit().putStringSet(KEY_LINK_IDS, updated).apply()
+        val editor = prefs.edit().putStringSet(KEY_LINK_IDS, updated)
+        label?.takeIf { it.isNotBlank() }?.let { editor.putString(labelKey(linkId), it.take(80)) }
+        editor.apply()
         return updated
     }
 
+    fun setLinkLabel(linkId: String, label: String) {
+        if (linkId in linkIds() && label.isNotBlank()) {
+            prefs.edit().putString(labelKey(linkId), label.take(80)).apply()
+        }
+    }
+
+    fun linkLabel(linkId: String): String? =
+        prefs.getString(labelKey(linkId), null)?.takeIf { it.isNotBlank() }
+
     fun removeLink(linkId: String): Set<String> {
         val updated = linkIds() - linkId
-        prefs.edit().putStringSet(KEY_LINK_IDS, updated).apply()
+        prefs.edit()
+            .putStringSet(KEY_LINK_IDS, updated)
+            .remove(labelKey(linkId))
+            .apply()
         return updated
     }
 
@@ -40,10 +54,13 @@ class OpenFinanceLocalStore(context: Context) {
             .apply()
     }
 
+    private fun labelKey(linkId: String) = "$KEY_LINK_LABEL_PREFIX$linkId"
+
     private companion object {
         const val KEY_EXTERNAL_ID = "external_id"
         const val KEY_LINK_IDS = "belvo_link_ids"
         const val KEY_LEGACY_LINK_ID = "belvo_link_id"
         const val KEY_MIGRATED = "multi_link_migrated"
+        const val KEY_LINK_LABEL_PREFIX = "belvo_link_label_"
     }
 }
