@@ -47,6 +47,9 @@ data class FinancialInstitution(
 data class FinancialSummary(
     val income: BigDecimal,
     val expenses: BigDecimal,
+    val pendingIncome: BigDecimal = BigDecimal.ZERO,
+    val pendingExpenses: BigDecimal = BigDecimal.ZERO,
+    val pendingTransactions: Int = 0,
     val excludedForeignTransactions: Int = 0
 ) {
     val balance: BigDecimal
