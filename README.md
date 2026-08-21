@@ -8,12 +8,14 @@ O código está em nível de **MVP pessoal/controlado**. Ele não deve ser trata
 
 O projeto contém:
 
-- painel mensal com saldo, entradas e saídas em BRL;
+- painel mensal com saldo líquido, entradas e saídas **processadas** em BRL;
+- movimentações `PENDING` visíveis e somadas separadamente, fora dos totais processados;
 - valores monetários em `BigDecimal`;
 - navegação entre meses;
-- gastos agrupados por categoria;
+- gastos processados agrupados por categoria;
 - pesquisa e filtro de transações;
 - suporte a várias conexões Open Finance;
+- identificação da instituição antes de permitir remoção de uma conexão;
 - consolidação das movimentações das conexões carregadas;
 - tratamento explícito de moedas estrangeiras e transações pendentes;
 - modo demonstrativo apenas quando não existe conexão real salva;
@@ -74,6 +76,10 @@ Android
 ```
 
 As credenciais `BELVO_SECRET_ID` e `BELVO_SECRET_PASSWORD` nunca ficam no APK.
+
+## Totais financeiros
+
+Os totais mensais e as categorias consideram transações em BRL que já não estejam com status `PENDING`. Uma transação `PENDING` é mostrada na lista, mas fica em um cartão separado de entradas/saídas pendentes até a instituição informar que foi processada. Movimentações sem valor convertido para BRL também não são misturadas aos totais em reais.
 
 ## Atualização dos dados
 
