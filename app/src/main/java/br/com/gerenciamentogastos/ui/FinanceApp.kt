@@ -86,6 +86,7 @@ fun FinanceApp(
     val demoTransactions = remember { repository.transactions() }
     var connectedLinks by remember { mutableStateOf(localStore.linkIds()) }
     var liveTransactions by remember { mutableStateOf<List<FinanceTransaction>>(emptyList()) }
+    var liveDataNotice by remember { mutableStateOf<String?>(null) }
     var hasLoadedLiveData by remember { mutableStateOf(false) }
     var selectedMonth by remember { mutableStateOf(YearMonth.now()) }
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -139,12 +140,14 @@ fun FinanceApp(
                 usingDemo = usingDemo,
                 connectionCount = connectedLinks.size,
                 hasLoadedLiveData = hasLoadedLiveData,
+                dataNotice = liveDataNotice,
                 modifier = Modifier.padding(padding)
             )
 
             1 -> TransactionsScreen(
                 transactions = transactions,
                 waitingForLoad = !usingDemo && !hasLoadedLiveData,
+                dataNotice = liveDataNotice,
                 modifier = Modifier.padding(padding)
             )
 
@@ -158,11 +161,13 @@ fun FinanceApp(
                     if (links != connectedLinks) {
                         connectedLinks = links
                         liveTransactions = emptyList()
+                        liveDataNotice = null
                         hasLoadedLiveData = false
                     }
                 },
-                onTransactionsLoaded = { loaded ->
+                onTransactionsLoaded = { loaded, notice ->
                     liveTransactions = loaded
+                    liveDataNotice = notice
                     hasLoadedLiveData = true
                 },
                 modifier = Modifier.padding(padding)
@@ -187,6 +192,7 @@ private fun DashboardScreen(
     usingDemo: Boolean,
     connectionCount: Int,
     hasLoadedLiveData: Boolean,
+    dataNotice: String?,
     modifier: Modifier = Modifier
 ) {
     val expensesByCategory = remember(transactions) {
@@ -231,11 +237,16 @@ private fun DashboardScreen(
                         when {
                             usingDemo -> "Dados de demonstração"
                             !hasLoadedLiveData -> "$connectionCount conexão(ões) • carregamento necessário"
+                            dataNotice != null -> "Open Finance • dados incompletos"
                             else -> "Open Finance • $connectionCount conexão(ões)"
                         }
                     )
                 }
             )
+        }
+
+        if (!usingDemo && dataNotice != null) {
+            item { DataNoticeCard(dataNotice) }
         }
 
         item { BalanceCard(summary) }
@@ -273,8 +284,11 @@ private fun DashboardScreen(
         if (transactions.isEmpty()) {
             item {
                 Text(
-                    if (!usingDemo && !hasLoadedLiveData) "Atualize o painel para carregar as movimentações já disponíveis."
-                    else "Nenhuma movimentação neste mês.",
+                    when {
+                        !usingDemo && dataNotice != null -> "Nenhuma movimentação confiável foi carregada nesta atualização."
+                        !usingDemo && !hasLoadedLiveData -> "Atualize o painel para carregar as movimentações já disponíveis."
+                        else -> "Nenhuma movimentação neste mês."
+                    },
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -283,6 +297,20 @@ private fun DashboardScreen(
         }
 
         item { Spacer(Modifier.height(12.dp)) }
+    }
+}
+
+@Composable
+private fun DataNoticeCard(message: String) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Atenção aos totais", fontWeight = FontWeight.SemiBold)
+            Text(
+                message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -352,6 +380,7 @@ private fun CategoryRow(category: Category, amount: BigDecimal, total: BigDecima
 private fun TransactionsScreen(
     transactions: List<FinanceTransaction>,
     waitingForLoad: Boolean,
+    dataNotice: String?,
     modifier: Modifier = Modifier
 ) {
     var query by remember { mutableStateOf("") }
@@ -393,10 +422,18 @@ private fun TransactionsScreen(
         }
         Spacer(Modifier.height(8.dp))
 
+        if (dataNotice != null) {
+            DataNoticeCard(dataNotice)
+            Spacer(Modifier.height(8.dp))
+        }
+
         if (filtered.isEmpty()) {
             Text(
-                if (waitingForLoad) "Há contas conectadas, mas os dados ainda não foram carregados nesta abertura do app."
-                else "Nenhuma transação encontrada.",
+                when {
+                    dataNotice != null -> "Nenhuma movimentação confiável foi carregada nesta atualização."
+                    waitingForLoad -> "Há contas conectadas, mas os dados ainda não foram carregados nesta abertura do app."
+                    else -> "Nenhuma transação encontrada."
+                },
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         } else {
@@ -471,7 +508,7 @@ private fun AccountsScreen(
     callbackUri: Uri?,
     onCallbackHandled: () -> Unit,
     onLinksChanged: (Set<String>) -> Unit,
-    onTransactionsLoaded: (List<FinanceTransaction>) -> Unit,
+    onTransactionsLoaded: (List<FinanceTransaction>, String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var accessCode by remember { mutableStateOf("") }
@@ -593,12 +630,18 @@ private fun AccountsScreen(
                 busy = false
                 val currentLinks = localStore.linkIds()
                 if (currentLinks != connectedLinkIds) onLinksChanged(currentLinks)
-                if (loadedAny) {
-                    onTransactionsLoaded(collected.distinctBy { it.id }.sortedByDescending { it.date })
+                val consolidated = collected.distinctBy { it.id }.sortedByDescending { it.date }
+                val notice = when {
+                    notes.isEmpty() -> null
+                    loadedAny -> "Os totais abaixo são parciais: ${notes.joinToString(" ")}"
+                    else -> "Os dados desta atualização estão indisponíveis: ${notes.joinToString(" ")}"
+                }
+                if (currentLinks.isNotEmpty()) {
+                    onTransactionsLoaded(if (loadedAny) consolidated else emptyList(), notice)
                 }
                 lastProviderEvent = latestWebhook
                 status = when {
-                    loadedAny && notes.isEmpty() -> "Painel atualizado: ${collected.distinctBy { it.id }.size} movimentações consolidadas."
+                    loadedAny && notes.isEmpty() -> "Painel atualizado: ${consolidated.size} movimentações consolidadas."
                     loadedAny -> "Painel atualizado parcialmente. ${notes.joinToString(" ")}"
                     notes.isNotEmpty() -> notes.joinToString(" ")
                     currentLinks.isEmpty() -> "Nenhuma conexão Open Finance foi encontrada para este perfil pessoal."
