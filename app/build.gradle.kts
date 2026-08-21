@@ -11,8 +11,8 @@ android {
         applicationId = "br.com.gerenciamentogastos"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
 
         val backendBaseUrl = providers.gradleProperty("BACKEND_BASE_URL")
             .orElse("https://example.invalid")
@@ -22,7 +22,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -39,10 +40,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = true
+    }
 }
 
 dependencies {
-    // Compose estável compatível com o SDK 36 disponível no GitHub Actions.
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
 
     implementation(composeBom)
