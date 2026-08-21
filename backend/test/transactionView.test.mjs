@@ -37,6 +37,22 @@ test("expõe somente campos necessários da transação", () => {
   assert.equal("local_currency_amount" in view, false);
 });
 
+test("mantém decimal textual exato no DTO", () => {
+  const view = toTransactionView({
+    id: "tx-exact",
+    description: "Valor grande",
+    amount: "999999999999999.1234",
+    local_currency_amount: "123456789012345.6789",
+    currency: "USD",
+    type: "INFLOW",
+    value_date: "2026-08-20",
+    status: "PROCESSED",
+  });
+
+  assert.equal(view.amount, "123456789012345.6789");
+  assert.equal(view.currency, "BRL");
+});
+
 test("preserva moeda original quando não existe conversão local", () => {
   const view = toTransactionView({
     id: "tx-usd",
