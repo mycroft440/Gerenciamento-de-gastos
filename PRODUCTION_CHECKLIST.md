@@ -8,12 +8,15 @@ Este arquivo é um **gate de publicação**. O fato de o CI estar verde não sig
 - [ ] Hospedar backend em HTTPS.
 - [ ] Montar volume persistente em `/data` para o SQLite.
 - [ ] Configurar `DEPLOYMENT_MODE=personal`.
+- [ ] Gerar e preservar um `PERSONAL_SUBJECT` aleatório, sem PII, no backend.
 - [ ] Definir segredos fortes em secret manager.
 - [ ] Publicar termos, ícone e logo exigidos pelo Hosted Widget.
 - [ ] Configurar webhook `POST /webhooks/belvo` com `Authorization: Bearer`.
 - [ ] Compilar o APK com `BACKEND_BASE_URL` HTTPS real.
 - [ ] Testar conexão, carga histórica, atualização do painel e exclusão no sandbox.
 - [ ] Testar reinício do backend e continuidade do estado persistido.
+- [ ] Testar reinstalação do Android: cache local vazio deve recuperar os links pelo `PERSONAL_SUBJECT` sem reconectar o banco.
+- [ ] Confirmar que trocar `PERSONAL_SUBJECT` é tratado como criação de outro perfil técnico, não como rotação comum.
 
 ## B. Uso pessoal com dados reais
 
@@ -24,9 +27,9 @@ Além da seção A:
 - [ ] Obter credenciais de produção e trocar `BELVO_BASE_URL` para `https://api.belvo.com`.
 - [ ] Configurar webhook de produção.
 - [ ] Definir política real de retenção e revisar `BELVO_STALE_DAYS`.
-- [ ] Fazer backup criptografado/teste de restauração do volume técnico.
+- [ ] Fazer backup criptografado/teste de restauração do volume técnico e da configuração `PERSONAL_SUBJECT`.
 - [ ] Configurar monitoramento de disponibilidade e alertas sem registrar dados financeiros.
-- [ ] Definir rotina de rotação de segredos.
+- [ ] Definir rotina de rotação de segredos sem alterar acidentalmente o subject estável.
 
 ## C. BLOQUEADORES para distribuição pública/multiusuário
 
@@ -35,7 +38,8 @@ Além da seção A:
 ### Identidade e autorização
 
 - [ ] Substituir `APP_ACCESS_CODE` compartilhado por autenticação individual.
-- [ ] Associar cada sessão a um usuário autenticado server-side, não apenas ao UUID local.
+- [ ] Associar cada sessão a um identificador estável server-side do usuário autenticado.
+- [ ] Gerar o `external_id` por usuário no backend/banco de identidade; nunca confiar em um subject fornecido pelo cliente.
 - [ ] Implementar revogação de sessões/dispositivos e recuperação de conta.
 - [ ] Migrar rate limiting para armazenamento compartilhado caso existam múltiplas instâncias.
 
@@ -51,7 +55,7 @@ Além da seção A:
 
 - [ ] Definir banco/arquitetura de estado compatível com a quantidade de instâncias e usuários.
 - [ ] Definir backup, restauração, retenção e exclusão.
-- [ ] Colocar segredos em secret manager com controle de acesso e rotação.
+- [ ] Colocar segredos/configuração privada em secret manager com controle de acesso e rotação.
 - [ ] TLS válido, HSTS no proxy de borda e política de atualização de dependências/runtime.
 - [ ] Observabilidade com redaction e política de acesso aos logs.
 - [ ] Plano de incidentes e canal privado para vulnerabilidades.
