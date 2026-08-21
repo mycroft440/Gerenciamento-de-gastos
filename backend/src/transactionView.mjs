@@ -1,13 +1,19 @@
-function finiteNonNegative(value) {
-  const number = Number(value);
-  return Number.isFinite(number) && number >= 0 ? number : null;
+const NON_NEGATIVE_DECIMAL = /^\d{1,15}(?:\.\d{1,4})?$/;
+
+function decimalText(value) {
+  if (typeof value === "string" && NON_NEGATIVE_DECIMAL.test(value)) return value;
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    const text = String(value);
+    return NON_NEGATIVE_DECIMAL.test(text) ? text : null;
+  }
+  return null;
 }
 
 export function toTransactionView(transaction) {
   if (!transaction || typeof transaction !== "object") return null;
   const type = transaction.type === "INFLOW" || transaction.type === "OUTFLOW" ? transaction.type : null;
-  const amount = finiteNonNegative(transaction.amount);
-  const localAmount = finiteNonNegative(transaction.local_currency_amount);
+  const amount = decimalText(transaction.amount);
+  const localAmount = decimalText(transaction.local_currency_amount);
   const valueDate = typeof transaction.value_date === "string" ? transaction.value_date : "";
   if (!transaction.id || !type || amount === null || !/^\d{4}-\d{2}-\d{2}$/.test(valueDate)) return null;
 
@@ -25,7 +31,7 @@ export function toTransactionView(transaction) {
   return {
     id: String(transaction.id),
     description: String(transaction.description || "Movimentação bancária").slice(0, 500),
-    amount: String(effectiveAmount),
+    amount: effectiveAmount,
     currency: effectiveCurrency,
     type,
     value_date: valueDate,
