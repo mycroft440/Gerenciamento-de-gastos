@@ -8,7 +8,7 @@ test("expõe somente campos necessários da transação", () => {
     description: "Mercado",
     amount: 50.25,
     local_currency_amount: 50.25,
-    currency: "BRL",
+    currency: "USD",
     type: "OUTFLOW",
     value_date: "2026-08-20",
     status: "PROCESSED",
@@ -24,8 +24,7 @@ test("expõe somente campos necessários da transação", () => {
   assert.deepEqual(view, {
     id: "tx-1",
     description: "Mercado",
-    amount: 50.25,
-    local_currency_amount: 50.25,
+    amount: "50.25",
     currency: "BRL",
     type: "OUTFLOW",
     value_date: "2026-08-20",
@@ -35,6 +34,20 @@ test("expõe somente campos necessários da transação", () => {
   assert.equal("account" in view, false);
   assert.equal("link" in view, false);
   assert.equal("internal_identification" in view, false);
+  assert.equal("local_currency_amount" in view, false);
+});
+
+test("preserva moeda original quando não existe conversão local", () => {
+  const view = toTransactionView({
+    id: "tx-usd",
+    description: "Compra exterior",
+    amount: 12.34,
+    currency: "USD",
+    type: "OUTFLOW",
+    value_date: "2026-08-20",
+  });
+  assert.equal(view.amount, "12.34");
+  assert.equal(view.currency, "USD");
 });
 
 test("descarta registros sem direção, valor ou data confiáveis", () => {
@@ -48,4 +61,5 @@ test("descarta registros sem direção, valor ou data confiáveis", () => {
   });
   assert.equal(page.count, 1);
   assert.equal(page.results[0].id, "ok");
+  assert.equal(page.results[0].amount, "3");
 });
