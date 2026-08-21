@@ -38,7 +38,7 @@ test("cria sessão OFDA sem expor segredo na URL do widget e minimiza recursos",
   const result = await client.createWidgetSession({
     name: "Pessoa Teste",
     cpf: "52998224725",
-    externalId: "device-123",
+    externalId: "personal_subject_123456",
   });
 
   assert.equal(captured.url, "https://sandbox.belvo.com/api/token/");
@@ -48,9 +48,35 @@ test("cria sessão OFDA sem expor segredo na URL do widget e minimiza recursos",
   assert.equal(body.stale_in, "90d");
   assert.equal(body.widget.consent.identification_info[0].number, "52998224725");
   assert.match(result.widgetUrl, /access_token=temporary-access/);
-  assert.match(result.widgetUrl, /external_id=device-123/);
+  assert.match(result.widgetUrl, /external_id=personal_subject_123456/);
   assert.match(result.widgetUrl, /resources=ACCOUNTS%2CTRANSACTIONS/);
   assert.doesNotMatch(result.widgetUrl, /secret-password/);
+});
+
+test("recupera links pelo external_id estável", async () => {
+  let requestedUrl;
+  const fetchImpl = async (url) => {
+    requestedUrl = String(url);
+    return new Response(JSON.stringify({
+      count: 1,
+      next: null,
+      previous: null,
+      results: [{
+        id: "00000000-0000-4000-8000-000000000001",
+        external_id: "personal_subject_123456",
+        institution: "banco_br_retail",
+      }],
+    }), { status: 200 });
+  };
+
+  const client = new BelvoClient(config, fetchImpl);
+  const result = await client.listLinksByExternalId("personal_subject_123456");
+
+  assert.equal(result.count, 1);
+  const parsed = new URL(requestedUrl);
+  assert.equal(parsed.pathname, "/api/links/");
+  assert.equal(parsed.searchParams.get("external_id"), "personal_subject_123456");
+  assert.equal(parsed.searchParams.get("page_size"), "100");
 });
 
 test("segue paginação de transações e consolida resultados", async () => {
