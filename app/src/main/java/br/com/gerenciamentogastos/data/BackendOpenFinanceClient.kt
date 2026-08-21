@@ -18,19 +18,31 @@ class BackendOpenFinanceClient(
 ) {
     data class LinkStatus(
         val accountsReady: Boolean,
-        val transactionsReady: Boolean
+        val transactionsReady: Boolean,
+        val deletionPending: Boolean,
+        val deleted: Boolean,
+        val lastError: String?
     )
 
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    fun isConfigured(): Boolean = baseUrl.startsWith("https://") && !baseUrl.contains("example.invalid")
+    fun isConfigured(): Boolean = runCatching {
+        val url = URL(baseUrl)
+        url.protocol == "https" && !baseUrl.contains("example.invalid") && url.userInfo == null
+    }.getOrDefault(false)
 
-    fun authenticate(accessCode: String, callback: (Result<String>) -> Unit) = runAsync(callback) {
+    fun authenticate(
+        accessCode: String,
+        externalId: String,
+        callback: (Result<String>) -> Unit
+    ) = runAsync(callback) {
         val json = request(
             method = "POST",
             path = "/v1/auth/session",
-            body = JSONObject().put("accessCode", accessCode)
+            body = JSONObject()
+                .put("accessCode", accessCode)
+                .put("externalId", externalId)
         ) as JSONObject
         json.getString("token")
     }
@@ -39,13 +51,11 @@ class BackendOpenFinanceClient(
         sessionToken: String,
         name: String,
         cpf: String,
-        externalId: String,
         callback: (Result<String>) -> Unit
     ) = runAsync(callback) {
         val body = JSONObject()
             .put("name", name)
             .put("cpf", cpf)
-            .put("externalId", externalId)
         val json = request(
             method = "POST",
             path = "/v1/open-finance/widget-session",
@@ -67,7 +77,10 @@ class BackendOpenFinanceClient(
         ) as JSONObject
         LinkStatus(
             accountsReady = json.optBoolean("accountsReady"),
-            transactionsReady = json.optBoolean("transactionsReady")
+            transactionsReady = json.optBoolean("transactionsReady"),
+            deletionPending = json.optBoolean("deletionPending"),
+            deleted = json.optBoolean("deleted"),
+            lastError = json.optString("lastError").takeIf { it.isNotBlank() && it != "null" }
         )
     }
 
@@ -90,11 +103,16 @@ class BackendOpenFinanceClient(
         buildList {
             for (index in 0 until items.length()) {
                 val item = items.optJSONObject(index) ?: continue
-                val providerType = item.optString("type")
-                val type = if (providerType == "INFLOW") TransactionType.INCOME else TransactionType.EXPENSE
+                val type = when (item.optString("type")) {
+                    "INFLOW" -> TransactionType.INCOME
+                    "OUTFLOW" -> TransactionType.EXPENSE
+                    else -> continue
+                }
+                val amount = item.optDouble("amount", Double.NaN)
+                if (!amount.isFinite() || amount < 0.0) continue
                 val description = item.optString("description").ifBlank { "Movimentação bancária" }
                 val date = runCatching { LocalDate.parse(item.getString("value_date")) }.getOrNull() ?: continue
-                val institution = item.optJSONObject("institution")
+                val institution = item.optJSONObject("account")?.optJSONObject("institution")
                 val source = institution?.optString("display_name")
                     ?.takeIf { it.isNotBlank() }
                     ?: institution?.optString("name")?.takeIf { it.isNotBlank() }
@@ -104,7 +122,7 @@ class BackendOpenFinanceClient(
                     FinanceTransaction(
                         id = item.optString("id", "belvo-$index-$date"),
                         description = description,
-                        amount = item.optDouble("amount", 0.0),
+                        amount = amount,
                         type = type,
                         category = TransactionCategorizer.categorize(description, type),
                         date = date,
@@ -148,6 +166,7 @@ class BackendOpenFinanceClient(
             requestMethod = method
             connectTimeout = 15_000
             readTimeout = 30_000
+            instanceFollowRedirects = false
             setRequestProperty("Accept", "application/json")
             setRequestProperty("Cache-Control", "no-store")
             bearer?.let { setRequestProperty("Authorization", "Bearer $it") }
@@ -158,16 +177,20 @@ class BackendOpenFinanceClient(
             }
         }
 
-        val code = connection.responseCode
-        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-        val text = stream?.bufferedReader()?.use { reader -> reader.readText() }.orEmpty()
-        if (code !in 200..299) {
-            val message = runCatching {
-                (JSONTokener(text).nextValue() as JSONObject).optString("error")
-            }.getOrNull().orEmpty()
-            throw IllegalStateException(message.ifBlank { "Falha HTTP $code" })
+        try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader()?.use { reader -> reader.readText() }.orEmpty()
+            if (code !in 200..299) {
+                val message = runCatching {
+                    (JSONTokener(text).nextValue() as JSONObject).optString("error")
+                }.getOrNull().orEmpty()
+                throw IllegalStateException(message.ifBlank { "Falha HTTP $code" })
+            }
+            if (text.isBlank()) return null
+            return JSONTokener(text).nextValue()
+        } finally {
+            connection.disconnect()
         }
-        if (text.isBlank()) return null
-        return JSONTokener(text).nextValue()
     }
 }
