@@ -1,27 +1,34 @@
 # Gerenciamento de Gastos
 
-Aplicativo Android nativo para consolidar receitas e despesas e conectar contas bancárias pelo Open Finance brasileiro.
+Aplicativo Android nativo para consolidar receitas e despesas e conectar várias contas bancárias por Open Finance no Brasil.
 
 ## Estado atual
 
-O projeto já contém:
+O código está em nível de **MVP pessoal/controlado**. Ele não deve ser tratado como pronto para distribuição pública multiusuário; os gates externos e arquiteturais estão em `PRODUCTION_CHECKLIST.md`.
 
-- painel com saldo, entradas e saídas;
-- gastos agrupados automaticamente por categoria;
-- pesquisa de transações;
-- modo demonstrativo para desenvolvimento sem credenciais;
-- integração real preparada com Belvo OFDA (Open Finance Brasil);
-- Hosted Widget para consentimento bancário;
-- retorno por deep link e armazenamento local do `link.id`;
-- backend próprio para proteger as credenciais Belvo;
-- autenticação de curta duração entre app e backend;
-- webhook para aguardar a carga histórica antes de buscar movimentações;
-- importação das transações reais para o painel;
-- desconexão/revogação do link;
-- testes Android e backend no GitHub Actions;
-- Dockerfile para hospedar o backend.
+O projeto contém:
 
-> O código do fluxo real está implementado, mas a conexão com um banco só é ativada depois de configurar credenciais Belvo, URLs públicas de termos/logo, webhook e uma URL HTTPS para o backend. Veja `OPEN_FINANCE_SETUP.md`.
+- painel mensal com saldo, entradas e saídas em BRL;
+- valores monetários em `BigDecimal`;
+- navegação entre meses;
+- gastos agrupados por categoria;
+- pesquisa e filtro de transações;
+- suporte a várias conexões Open Finance;
+- consolidação das movimentações das conexões carregadas;
+- tratamento explícito de moedas estrangeiras e transações pendentes;
+- modo demonstrativo apenas quando não existe conexão real salva;
+- Belvo OFDA / Open Finance Brasil;
+- Hosted Widget para consentimento;
+- validação server-side de que cada `link.id` pertence ao `external_id` da sessão;
+- backend próprio para proteger credenciais Belvo;
+- sessões curtas, rate limiting, timeout e minimização de dados;
+- webhook autenticado por Bearer e deduplicado;
+- persistência SQLite somente para estado técnico de webhooks/readiness;
+- exclusão assíncrona acompanhada até `link_deleted`;
+- Dockerfile do backend;
+- CI com testes, lint, build do container, APK debug e build release otimizado.
+
+> Nome e CPF não são persistidos pelo backend desta versão. As transações reais também não são cacheadas de forma persistente no Android: ficam em memória e precisam ser carregadas novamente após reabrir o app.
 
 ## Stack
 
@@ -37,25 +44,27 @@ O projeto já contém:
 
 ### Backend
 
-- Node.js 22
-- APIs HTTP nativas do Node, sem framework ou dependências npm de produção
-- Container Docker
+- Node.js 24.16+
+- `node:http` e `node:sqlite`, sem framework/dependências npm de produção
+- container Node 24.16 Alpine
 - Belvo Open Finance Data Aggregation (OFDA) Brasil
 
 ## Arquitetura
 
 ```text
 Android
-  ├── Resumo
+  ├── Resumo mensal
   ├── Transações
   └── Contas / Hosted Widget
              │
              ▼
      Backend HTTPS próprio
-       ├── sessão curta do app
+       ├── sessão curta vinculada ao external_id
        ├── criação do Widget Access Token
-       ├── contas/transações
-       └── webhook histórico
+       ├── validação de propriedade dos links
+       ├── DTO mínimo de transações
+       ├── exclusão assíncrona
+       └── webhook + SQLite técnico
              │
              ▼
         Belvo OFDA Brasil
@@ -64,41 +73,42 @@ Android
       Instituição financeira
 ```
 
-As credenciais `BELVO_SECRET_ID` e `BELVO_SECRET_PASSWORD` nunca ficam no APK. O celular recebe apenas a URL temporária do Hosted Widget e, após o consentimento, o identificador da conexão (`link.id`).
+As credenciais `BELVO_SECRET_ID` e `BELVO_SECRET_PASSWORD` nunca ficam no APK.
 
-## Build
+## Atualização dos dados
 
-O workflow `.github/workflows/android.yml` executa em paralelo:
+O botão **Atualizar painel** consulta o que já está disponível no provedor; ele não promete nem força coleta bancária em tempo real. A frequência de atualização de links recorrentes depende da configuração contratada com a Belvo. A carga histórica inicial pode abranger até aproximadamente 365 dias conforme o recurso/instituição.
 
-- testes do backend no Node 22;
-- testes Android;
-- compilação do APK debug;
-- upload do APK como artefato do GitHub Actions.
+## Build e CI
 
-Para gerar um APK que realmente converse com o backend:
+O workflow `.github/workflows/android.yml` valida em paralelo:
+
+- syntax check e testes do backend no Node 24.16;
+- build do container;
+- testes JVM Android;
+- `lintDebug`;
+- APK debug;
+- `assembleRelease` com minificação/shrink de recursos.
+
+Para gerar um APK apontando para o backend:
 
 ```bash
 gradle test :app:assembleDebug -PBACKEND_BASE_URL=https://api.seu-dominio.com
 ```
 
-Sem `BACKEND_BASE_URL`, o APK continua compilável e o modo de demonstração permanece disponível.
+Sem `BACKEND_BASE_URL`, o app continua compilável para demonstração, mas a conexão Open Finance real fica desabilitada.
 
-## Configuração do Open Finance
+## Open Finance
 
-Siga `OPEN_FINANCE_SETUP.md` para:
+Consulte `OPEN_FINANCE_SETUP.md` para configurar sandbox, backend, webhook e Belvo.
 
-1. obter as credenciais Belvo;
-2. configurar sandbox/produção;
-3. publicar termos, ícone e logo;
-4. hospedar o backend em HTTPS;
-5. cadastrar o webhook;
-6. apontar o APK para o backend.
+## Segurança, privacidade e produção
 
-## Próximas etapas
+- `SECURITY.md` — modelo de ameaça, segredos, persistência e limites.
+- `PRIVACY_TEMPLATE.md` — inventário técnico de dados para elaboração da política final.
+- `PRODUCTION_CHECKLIST.md` — gates obrigatórios para dados reais/publicação.
+- `REVIEW_REPORT.md` — relatório da revisão Crítico ↔ Executor.
 
-1. Hospedar o backend e configurar a conta Belvo.
-2. Adicionar persistência local das transações reais para uso offline.
-3. Persistir no servidor o estado dos webhooks/conexões.
-4. Melhorar categorização e permitir correção manual.
-5. Adicionar orçamento, metas, recorrências e alertas.
-6. Para distribuição multiusuário, substituir o código de acesso pessoal por autenticação individual e App Links HTTPS verificados.
+## Limite intencional
+
+O backend aceita somente `DEPLOYMENT_MODE=personal`. Para vários usuários é obrigatório substituir o código compartilhado por autenticação individual, migrar callbacks para App Links HTTPS verificados e cumprir os demais gates de `PRODUCTION_CHECKLIST.md`.
