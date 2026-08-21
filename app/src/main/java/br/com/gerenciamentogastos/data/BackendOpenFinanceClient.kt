@@ -21,7 +21,8 @@ class BackendOpenFinanceClient(
         val transactionsReady: Boolean,
         val deletionPending: Boolean,
         val deleted: Boolean,
-        val lastError: String?
+        val accountsError: String?,
+        val transactionsError: String?
     )
 
     private val executor = Executors.newSingleThreadExecutor()
@@ -80,7 +81,8 @@ class BackendOpenFinanceClient(
             transactionsReady = json.optBoolean("transactionsReady"),
             deletionPending = json.optBoolean("deletionPending"),
             deleted = json.optBoolean("deleted"),
-            lastError = json.optString("lastError").takeIf { it.isNotBlank() && it != "null" }
+            accountsError = nullableString(json, "accountsError"),
+            transactionsError = nullableString(json, "transactionsError")
         )
     }
 
@@ -112,11 +114,7 @@ class BackendOpenFinanceClient(
                 if (!amount.isFinite() || amount < 0.0) continue
                 val description = item.optString("description").ifBlank { "Movimentação bancária" }
                 val date = runCatching { LocalDate.parse(item.getString("value_date")) }.getOrNull() ?: continue
-                val institution = item.optJSONObject("account")?.optJSONObject("institution")
-                val source = institution?.optString("display_name")
-                    ?.takeIf { it.isNotBlank() }
-                    ?: institution?.optString("name")?.takeIf { it.isNotBlank() }
-                    ?: "Open Finance"
+                val source = item.optString("source").takeIf { it.isNotBlank() } ?: "Open Finance"
 
                 add(
                     FinanceTransaction(
@@ -145,6 +143,9 @@ class BackendOpenFinanceClient(
         )
         Unit
     }
+
+    private fun nullableString(json: JSONObject, key: String): String? =
+        json.optString(key).takeIf { it.isNotBlank() && it != "null" }
 
     private fun encodePath(value: String): String = java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
 
