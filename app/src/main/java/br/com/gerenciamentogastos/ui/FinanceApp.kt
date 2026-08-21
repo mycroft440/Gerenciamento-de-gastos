@@ -62,6 +62,7 @@ import br.com.gerenciamentogastos.model.FinanceTransaction
 import br.com.gerenciamentogastos.model.TransactionStatus
 import br.com.gerenciamentogastos.model.TransactionType
 import java.math.BigDecimal
+import java.math.RoundingMode
 import java.text.NumberFormat
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -69,7 +70,7 @@ import java.time.format.TextStyle
 import java.util.Currency
 import java.util.Locale
 
-private val ptBr = Locale("pt", "BR")
+private val ptBr = Locale.forLanguageTag("pt-BR")
 private val brlFormat = NumberFormat.getCurrencyInstance(ptBr)
 private val dateFormat = DateTimeFormatter.ofPattern("dd/MM")
 
@@ -85,7 +86,7 @@ fun FinanceApp(
     val demoTransactions = remember { repository.transactions() }
     var connectedLinks by remember { mutableStateOf(localStore.linkIds()) }
     var liveTransactions by remember { mutableStateOf<List<FinanceTransaction>>(emptyList()) }
-    var hasSynced by remember { mutableStateOf(false) }
+    var hasLoadedLiveData by remember { mutableStateOf(false) }
     var selectedMonth by remember { mutableStateOf(YearMonth.now()) }
     var selectedTab by remember { mutableIntStateOf(0) }
 
@@ -137,14 +138,16 @@ fun FinanceApp(
                 onNextMonth = { if (selectedMonth < YearMonth.now()) selectedMonth = selectedMonth.plusMonths(1) },
                 usingDemo = usingDemo,
                 connectionCount = connectedLinks.size,
-                hasSynced = hasSynced,
+                hasLoadedLiveData = hasLoadedLiveData,
                 modifier = Modifier.padding(padding)
             )
+
             1 -> TransactionsScreen(
                 transactions = transactions,
-                waitingForSync = !usingDemo && !hasSynced,
+                waitingForLoad = !usingDemo && !hasLoadedLiveData,
                 modifier = Modifier.padding(padding)
             )
+
             else -> AccountsScreen(
                 client = openFinanceClient,
                 localStore = localStore,
@@ -155,12 +158,12 @@ fun FinanceApp(
                     if (links != connectedLinks) {
                         connectedLinks = links
                         liveTransactions = emptyList()
-                        hasSynced = false
+                        hasLoadedLiveData = false
                     }
                 },
                 onTransactionsLoaded = { loaded ->
                     liveTransactions = loaded
-                    hasSynced = true
+                    hasLoadedLiveData = true
                 },
                 modifier = Modifier.padding(padding)
             )
@@ -183,7 +186,7 @@ private fun DashboardScreen(
     onNextMonth: () -> Unit,
     usingDemo: Boolean,
     connectionCount: Int,
-    hasSynced: Boolean,
+    hasLoadedLiveData: Boolean,
     modifier: Modifier = Modifier
 ) {
     val expensesByCategory = remember(transactions) {
@@ -223,7 +226,7 @@ private fun DashboardScreen(
                     Text(
                         when {
                             usingDemo -> "Dados de demonstração"
-                            !hasSynced -> "$connectionCount conexão(ões) • sincronização necessária"
+                            !hasLoadedLiveData -> "$connectionCount conexão(ões) • carregamento necessário"
                             else -> "Open Finance • $connectionCount conexão(ões)"
                         }
                     )
@@ -262,7 +265,7 @@ private fun DashboardScreen(
         if (transactions.isEmpty()) {
             item {
                 Text(
-                    if (!usingDemo && !hasSynced) "Sincronize as contas para carregar as movimentações reais."
+                    if (!usingDemo && !hasLoadedLiveData) "Atualize o painel para carregar as movimentações já disponíveis."
                     else "Nenhuma movimentação neste mês.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -304,7 +307,7 @@ private fun SummaryMetric(label: String, value: BigDecimal) {
 @Composable
 private fun CategoryRow(category: Category, amount: BigDecimal, total: BigDecimal) {
     val progress = if (total.signum() > 0) {
-        amount.divide(total, 6, java.math.RoundingMode.HALF_UP).toFloat().coerceIn(0f, 1f)
+        amount.divide(total, 6, RoundingMode.HALF_UP).toFloat().coerceIn(0f, 1f)
     } else 0f
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -322,7 +325,7 @@ private fun CategoryRow(category: Category, amount: BigDecimal, total: BigDecima
 @Composable
 private fun TransactionsScreen(
     transactions: List<FinanceTransaction>,
-    waitingForSync: Boolean,
+    waitingForLoad: Boolean,
     modifier: Modifier = Modifier
 ) {
     var query by remember { mutableStateOf("") }
@@ -366,7 +369,7 @@ private fun TransactionsScreen(
 
         if (filtered.isEmpty()) {
             Text(
-                if (waitingForSync) "Há contas conectadas, mas os dados ainda não foram sincronizados nesta abertura do app."
+                if (waitingForLoad) "Há contas conectadas, mas os dados ainda não foram carregados nesta abertura do app."
                 else "Nenhuma transação encontrada.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -438,10 +441,11 @@ private fun AccountsScreen(
     var cpf by remember { mutableStateOf("") }
     var pendingLinkId by remember { mutableStateOf<String?>(null) }
     var widgetUrl by remember { mutableStateOf<String?>(null) }
+    var lastProviderEvent by remember { mutableStateOf<String?>(null) }
     var status by remember {
         mutableStateOf(
             if (connectedLinkIds.isEmpty()) "Nenhum banco conectado."
-            else "${connectedLinkIds.size} conexão(ões) salva(s). Sincronize para buscar os dados."
+            else "${connectedLinkIds.size} conexão(ões) salva(s). Atualize o painel para carregar os dados disponíveis."
         )
     }
     var busy by remember { mutableStateOf(false) }
@@ -465,7 +469,7 @@ private fun AccountsScreen(
         val updated = localStore.addLink(id)
         pendingLinkId = null
         onLinksChanged(updated)
-        status = "Consentimento confirmado. Aguarde a preparação do histórico e toque em Sincronizar tudo."
+        status = "Consentimento confirmado. Aguarde a preparação do histórico e use Atualizar painel."
     }
 
     fun confirmLink(candidateId: String) {
@@ -500,6 +504,7 @@ private fun AccountsScreen(
                     if (candidate.isNullOrBlank()) status = "Retorno do banco sem identificador de conexão."
                     else confirmLink(candidate)
                 }
+
                 "exit" -> status = "Conexão cancelada antes da conclusão."
                 "error" -> status = "A instituição retornou um erro durante a conexão."
             }
@@ -529,7 +534,7 @@ private fun AccountsScreen(
         }
     }
 
-    fun syncAll() {
+    fun refreshDashboard() {
         val ids = connectedLinkIds.toList()
         if (ids.isEmpty()) {
             status = "Conecte uma instituição primeiro."
@@ -539,6 +544,11 @@ private fun AccountsScreen(
             val collected = mutableListOf<FinanceTransaction>()
             val notes = mutableListOf<String>()
             var loadedAny = false
+            var latestWebhook: String? = null
+
+            fun rememberWebhook(value: String?) {
+                if (value != null && (latestWebhook == null || value > latestWebhook!!)) latestWebhook = value
+            }
 
             fun finish() {
                 busy = false
@@ -547,11 +557,12 @@ private fun AccountsScreen(
                 if (loadedAny) {
                     onTransactionsLoaded(collected.distinctBy { it.id }.sortedByDescending { it.date })
                 }
+                lastProviderEvent = latestWebhook
                 status = when {
-                    loadedAny && notes.isEmpty() -> "Sincronização concluída: ${collected.distinctBy { it.id }.size} movimentações consolidadas."
-                    loadedAny -> "Sincronização parcial concluída. ${notes.joinToString(" ")}"
+                    loadedAny && notes.isEmpty() -> "Painel atualizado: ${collected.distinctBy { it.id }.size} movimentações consolidadas."
+                    loadedAny -> "Painel atualizado parcialmente. ${notes.joinToString(" ")}"
                     notes.isNotEmpty() -> notes.joinToString(" ")
-                    else -> "Nenhum dado novo foi carregado."
+                    else -> "Nenhum dado disponível foi carregado."
                 }
             }
 
@@ -563,24 +574,29 @@ private fun AccountsScreen(
                 val id = ids[index]
                 client.linkStatus(token, id) { statusResult ->
                     statusResult.onSuccess { readiness ->
+                        rememberWebhook(readiness.lastWebhookAt)
                         when {
                             readiness.deleted -> {
                                 localStore.removeLink(id)
                                 notes += "Uma conexão removida pela instituição foi apagada localmente."
                                 loadIndex(index + 1)
                             }
+
                             readiness.deletionPending -> {
                                 notes += "Uma conexão ainda aguarda confirmação de remoção."
                                 loadIndex(index + 1)
                             }
+
                             readiness.transactionsError != null -> {
                                 notes += "Uma instituição informou erro ao preparar transações."
                                 loadIndex(index + 1)
                             }
+
                             !readiness.transactionsReady -> {
                                 notes += "O histórico de uma instituição ainda está sendo preparado."
                                 loadIndex(index + 1)
                             }
+
                             else -> client.transactions(token, id) { transactionsResult ->
                                 transactionsResult.onSuccess {
                                     loadedAny = true
@@ -607,7 +623,7 @@ private fun AccountsScreen(
             client.deleteLink(token, id) { result ->
                 busy = false
                 result.onSuccess {
-                    status = "Remoção solicitada. A conexão permanece salva até a Belvo confirmar a exclusão; use Sincronizar tudo para verificar."
+                    status = "Remoção solicitada. A conexão permanece salva até a Belvo confirmar a exclusão; use Atualizar painel para verificar."
                 }.onFailure {
                     status = "Falha ao solicitar a remoção: ${it.message ?: "erro desconhecido"}"
                 }
@@ -623,11 +639,12 @@ private fun AccountsScreen(
             Spacer(Modifier.height(16.dp))
             ScreenHeader("Contas", "Conecte e consolide vários bancos pelo Open Finance")
         }
+
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Text(
                     if (client.isConfigured())
-                        "A senha do seu banco nunca é solicitada por este app. O consentimento acontece no fluxo da instituição, intermediado pela Belvo. A carga inicial pode abranger até 12 meses."
+                        "A senha do seu banco nunca é solicitada por este app. O consentimento acontece no fluxo da instituição, intermediado pela Belvo. A carga inicial pode abranger até 365 dias."
                     else
                         "O código do Open Finance está pronto, mas o APK atual foi gerado sem BACKEND_BASE_URL. Configure o backend antes de tentar conectar.",
                     modifier = Modifier.padding(16.dp),
@@ -635,6 +652,29 @@ private fun AccountsScreen(
                 )
             }
         }
+
+        if (client.isConfigured()) {
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Como a atualização funciona", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Atualizar painel apenas lê os dados que o provedor Open Finance já disponibilizou. Isso não força uma coleta nova no banco e não deve ser interpretado como tempo real.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        lastProviderEvent?.let {
+                            Text(
+                                "Último evento recebido do provedor: $it",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         item {
             OutlinedTextField(
                 value = accessCode,
@@ -666,8 +706,8 @@ private fun AccountsScreen(
                 }
             }
             item {
-                Button(onClick = ::syncAll, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (busy) "Sincronizando…" else "Sincronizar tudo")
+                Button(onClick = ::refreshDashboard, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (busy) "Atualizando…" else "Atualizar painel")
                 }
             }
         }
@@ -784,10 +824,9 @@ private fun BelvoWidgetDialog(
                         settings.domStorageEnabled = true
                         settings.allowFileAccess = false
                         settings.allowContentAccess = false
-                        settings.allowFileAccessFromFileURLs = false
-                        settings.allowUniversalAccessFromFileURLs = false
                         settings.javaScriptCanOpenWindowsAutomatically = false
                         settings.setSupportMultipleWindows(false)
+                        settings.setGeolocationEnabled(false)
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                         settings.safeBrowsingEnabled = true
                         webViewClient = object : WebViewClient() {
@@ -803,6 +842,7 @@ private fun BelvoWidgetDialog(
                                 }
                                 if (uri.scheme == "http") return true
                                 if (uri.scheme == "https") return false
+                                if (uri.scheme in setOf("file", "content", "javascript", "data", "about")) return true
                                 runCatching {
                                     val intent = if (uri.toString().startsWith("intent://")) {
                                         Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
