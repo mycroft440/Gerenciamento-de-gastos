@@ -22,13 +22,21 @@ O aplicativo consolida movimentações financeiras autorizadas pelo usuário por
 
 São informados na tela de conexão e enviados ao backend exclusivamente para criar o consentimento Open Finance na Belvo. O backend desta versão não persiste nome nem CPF.
 
-### Identificador local (`external_id`)
+### Identificador técnico do perfil (`PERSONAL_SUBJECT` / `external_id`)
 
-É um UUID aleatório gerado pelo app. Não contém CPF, e-mail ou nome. É usado para vincular sessões e conexões Open Finance ao mesmo dispositivo/perfil local.
+No modo pessoal, o backend mantém um identificador técnico aleatório e estável denominado `PERSONAL_SUBJECT`. Ele não é gerado pelo aparelho, não deve conter CPF, e-mail, nome, telefone ou outra PII e é enviado à Belvo como `external_id`.
+
+Esse identificador vincula sessões e conexões Open Finance ao mesmo perfil pessoal e permite reencontrar links após reinstalação ou troca de aparelho. O Android não precisa conhecer nem persistir esse valor.
+
+Versões antigas do aplicativo geravam um `external_id` no dispositivo; a versão atual remove esse valor legado das preferências locais.
 
 ### Identificador da conexão (`link.id`)
 
-É armazenado localmente para que o app possa consultar o estado da conexão e carregar dados autorizados. Sozinho, ele não substitui a autenticação exigida pelo backend.
+É armazenado localmente como referência/cache para consultar o estado da conexão e carregar dados autorizados. Sozinho, ele não substitui a autenticação exigida pelo backend. Se o cache local for perdido, o backend pode recuperar os links associados ao `PERSONAL_SUBJECT` diretamente do provedor.
+
+### Rótulo da instituição
+
+O app pode persistir localmente um rótulo derivado do identificador institucional da conexão para evitar que o usuário remova um link sem saber a qual banco ele pertence. Dados de conta, saldo e extrato não são persistidos junto desse rótulo.
 
 ### Movimentações financeiras
 
@@ -38,7 +46,7 @@ Nesta versão, as transações ficam somente em memória no Android e são desca
 
 ### Metadados técnicos do backend
 
-O backend persiste apenas informações necessárias para continuidade dos webhooks e exclusão de conexões, como `link_id`, `external_id`, readiness, erros técnicos, IDs de webhooks e timestamps. CPF e extratos não são gravados nesse banco.
+O backend persiste apenas informações necessárias para continuidade dos webhooks e exclusão de conexões, como `link_id`, subject/`external_id` técnico, readiness, erros técnicos, IDs de webhooks e timestamps. CPF e extratos não são gravados nesse banco.
 
 ## 4. Terceiros envolvidos
 
@@ -52,7 +60,7 @@ A política final precisa identificar corretamente os operadores/suboperadores r
 
 ## 5. Segurança
 
-O projeto usa HTTPS para a comunicação do aplicativo, sessões curtas, segregação de segredos no backend, autenticação do webhook, validação de propriedade das conexões e minimização dos dados enviados ao APK. Veja `SECURITY.md`.
+O projeto usa HTTPS para a comunicação do aplicativo, sessões curtas, segregação de segredos no backend, autenticação do webhook, validação de propriedade das conexões, subject técnico estável no servidor e minimização dos dados enviados ao APK. Veja `SECURITY.md`.
 
 ## 6. Retenção
 
@@ -60,13 +68,15 @@ Definir juridicamente antes da publicação. No código atual:
 
 - nome e CPF não são persistidos pelo backend;
 - transações não são persistidas no Android;
+- `link.id` e rótulos institucionais locais podem ser reconstruídos a partir do perfil no backend/provedor;
 - metadados técnicos de conexão permanecem enquanto necessários para administrar o consentimento/exclusão;
 - IDs de webhooks antigos são podados pelo backend;
+- o `PERSONAL_SUBJECT` deve permanecer estável enquanto houver links que precisem ser reencontrados;
 - a retenção configurada no provedor (`BELVO_STALE_DAYS`) deve ser alinhada à política final e ao contrato vigente.
 
 ## 7. Revogação e exclusão da conexão
 
-O usuário pode solicitar a remoção de uma conexão pelo aplicativo. O backend solicita a exclusão assíncrona do link na Belvo e mantém o identificador local até receber confirmação `link_deleted`. Depois da confirmação, a conexão é removida localmente na próxima atualização do painel.
+O usuário pode solicitar a remoção de uma conexão pelo aplicativo. O backend solicita a exclusão assíncrona do link na Belvo e acompanha a confirmação `link_deleted`. Na próxima reconciliação/atualização do painel, referências locais que já não pertencem ao perfil são removidas.
 
 A política final deve explicar também como o titular solicita exclusão de eventuais dados mantidos fora desse fluxo técnico.
 
