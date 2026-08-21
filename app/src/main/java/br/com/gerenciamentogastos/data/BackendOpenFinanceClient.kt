@@ -19,6 +19,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 class BackendOpenFinanceClient(
     private val baseUrl: String = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
 ) : AutoCloseable {
+    data class LinkSummary(
+        val id: String,
+        val institution: String?,
+        val status: String?
+    )
+
     data class LinkStatus(
         val institution: String?,
         val accountsReady: Boolean,
@@ -44,17 +50,39 @@ class BackendOpenFinanceClient(
 
     fun authenticate(
         accessCode: String,
-        externalId: String,
         callback: (Result<String>) -> Unit
     ) = runAsync(callback) {
         val json = request(
             method = "POST",
             path = "/v1/auth/session",
-            body = JSONObject()
-                .put("accessCode", accessCode)
-                .put("externalId", externalId)
+            body = JSONObject().put("accessCode", accessCode)
         ) as JSONObject
         json.getString("token")
+    }
+
+    fun links(
+        sessionToken: String,
+        callback: (Result<List<LinkSummary>>) -> Unit
+    ) = runAsync(callback) {
+        val json = request(
+            method = "GET",
+            path = "/v1/open-finance/links",
+            bearer = sessionToken
+        ) as JSONObject
+        val items = json.optJSONArray("links") ?: JSONArray()
+        buildList {
+            for (index in 0 until items.length()) {
+                val item = items.optJSONObject(index) ?: continue
+                val id = item.optString("id").takeIf { UUID_PATTERN.matches(it) } ?: continue
+                add(
+                    LinkSummary(
+                        id = id,
+                        institution = nullableString(item, "institution"),
+                        status = nullableString(item, "status")
+                    )
+                )
+            }
+        }.distinctBy { it.id }
     }
 
     fun createWidgetSession(
@@ -223,5 +251,9 @@ class BackendOpenFinanceClient(
         } finally {
             connection.disconnect()
         }
+    }
+
+    private companion object {
+        val UUID_PATTERN = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
     }
 }
