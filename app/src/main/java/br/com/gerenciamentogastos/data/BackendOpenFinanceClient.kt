@@ -20,6 +20,7 @@ class BackendOpenFinanceClient(
     private val baseUrl: String = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
 ) : AutoCloseable {
     data class LinkStatus(
+        val institution: String?,
         val accountsReady: Boolean,
         val transactionsReady: Boolean,
         val deletionPending: Boolean,
@@ -85,6 +86,7 @@ class BackendOpenFinanceClient(
             bearer = sessionToken
         ) as JSONObject
         LinkStatus(
+            institution = nullableString(json, "institution"),
             accountsReady = json.optBoolean("accountsReady"),
             transactionsReady = json.optBoolean("transactionsReady"),
             deletionPending = json.optBoolean("deletionPending"),
