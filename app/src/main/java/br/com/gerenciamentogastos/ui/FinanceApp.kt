@@ -424,6 +424,19 @@ private fun formatMoney(amount: BigDecimal, currencyCode: String): String {
     }.getOrElse { "$currencyCode ${amount.toPlainString()}" }
 }
 
+private fun institutionLabel(raw: String?): String? {
+    val normalized = raw?.trim()?.takeIf { it.matches(Regex("^[a-z_]{1,80}$")) } ?: return null
+    val withoutSuffix = normalized
+        .removeSuffix("_br_retail")
+        .removeSuffix("_br_business")
+        .removeSuffix("_br")
+    return withoutSuffix
+        .split('_')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { part -> part.replaceFirstChar { it.titlecase(ptBr) } }
+        .takeIf { it.isNotBlank() }
+}
+
 @Composable
 private fun AccountsScreen(
     client: BackendOpenFinanceClient,
@@ -465,8 +478,8 @@ private fun AccountsScreen(
         }
     }
 
-    fun persistVerifiedLink(id: String) {
-        val updated = localStore.addLink(id)
+    fun persistVerifiedLink(id: String, institution: String?) {
+        val updated = localStore.addLink(id, institutionLabel(institution))
         pendingLinkId = null
         onLinksChanged(updated)
         status = "Consentimento confirmado. Aguarde a preparação do histórico e use Atualizar painel."
@@ -487,7 +500,7 @@ private fun AccountsScreen(
                         pendingLinkId = null
                         status = "A conexão informada já foi removida."
                     } else {
-                        persistVerifiedLink(candidateId)
+                        persistVerifiedLink(candidateId, readiness.institution)
                     }
                 }.onFailure {
                     status = "O retorno do banco não pôde ser validado. A conexão não foi salva."
@@ -575,6 +588,7 @@ private fun AccountsScreen(
                 client.linkStatus(token, id) { statusResult ->
                     statusResult.onSuccess { readiness ->
                         rememberWebhook(readiness.lastWebhookAt)
+                        institutionLabel(readiness.institution)?.let { localStore.setLinkLabel(id, it) }
                         when {
                             readiness.deleted -> {
                                 localStore.removeLink(id)
@@ -692,16 +706,27 @@ private fun AccountsScreen(
                 Text("Conexões salvas", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             }
             items(connectedLinkIds.sorted()) { id ->
+                val savedLabel = localStore.linkLabel(id)
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text("Conexão Open Finance", fontWeight = FontWeight.SemiBold)
+                            Text(savedLabel ?: "Instituição ainda não identificada", fontWeight = FontWeight.SemiBold)
                             Text("ID ${id.take(8)}…", style = MaterialTheme.typography.bodySmall)
+                            if (savedLabel == null) {
+                                Text(
+                                    "Atualize o painel para identificar esta conexão antes de removê-la.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                        OutlinedButton(onClick = { requestDisconnect(id) }, enabled = !busy) { Text("Remover") }
+                        OutlinedButton(
+                            onClick = { requestDisconnect(id) },
+                            enabled = !busy && savedLabel != null
+                        ) { Text("Remover") }
                     }
                 }
             }
