@@ -4,29 +4,54 @@ import android.os.Handler
 import android.os.Looper
 import br.com.gerenciamentogastos.BuildConfig
 import br.com.gerenciamentogastos.model.FinanceTransaction
+import br.com.gerenciamentogastos.model.TransactionStatus
 import br.com.gerenciamentogastos.model.TransactionType
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
+import java.math.BigDecimal
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.LocalDate
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class BackendOpenFinanceClient(
     private val baseUrl: String = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
-) {
-    data class LinkStatus(
-        val accountsReady: Boolean,
-        val transactionsReady: Boolean
+) : AutoCloseable {
+    data class LinkSummary(
+        val id: String,
+        val institution: String?,
+        val status: String?
     )
+
+    data class LinkStatus(
+        val institution: String?,
+        val accountsReady: Boolean,
+        val transactionsReady: Boolean,
+        val deletionPending: Boolean,
+        val deleted: Boolean,
+        val accountsError: String?,
+        val transactionsError: String?,
+        val lastWebhookAt: String?
+    ) {
+        val lastError: String?
+            get() = transactionsError
+    }
 
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val closed = AtomicBoolean(false)
 
-    fun isConfigured(): Boolean = baseUrl.startsWith("https://") && !baseUrl.contains("example.invalid")
+    fun isConfigured(): Boolean = runCatching {
+        val url = URL(baseUrl)
+        url.protocol == "https" && !baseUrl.contains("example.invalid") && url.userInfo == null
+    }.getOrDefault(false)
 
-    fun authenticate(accessCode: String, callback: (Result<String>) -> Unit) = runAsync(callback) {
+    fun authenticate(
+        accessCode: String,
+        callback: (Result<String>) -> Unit
+    ) = runAsync(callback) {
         val json = request(
             method = "POST",
             path = "/v1/auth/session",
@@ -35,17 +60,40 @@ class BackendOpenFinanceClient(
         json.getString("token")
     }
 
+    fun links(
+        sessionToken: String,
+        callback: (Result<List<LinkSummary>>) -> Unit
+    ) = runAsync(callback) {
+        val json = request(
+            method = "GET",
+            path = "/v1/open-finance/links",
+            bearer = sessionToken
+        ) as JSONObject
+        val items = json.optJSONArray("links") ?: JSONArray()
+        buildList {
+            for (index in 0 until items.length()) {
+                val item = items.optJSONObject(index) ?: continue
+                val id = item.optString("id").takeIf { UUID_PATTERN.matches(it) } ?: continue
+                add(
+                    LinkSummary(
+                        id = id,
+                        institution = nullableString(item, "institution"),
+                        status = nullableString(item, "status")
+                    )
+                )
+            }
+        }.distinctBy { it.id }
+    }
+
     fun createWidgetSession(
         sessionToken: String,
         name: String,
         cpf: String,
-        externalId: String,
         callback: (Result<String>) -> Unit
     ) = runAsync(callback) {
         val body = JSONObject()
             .put("name", name)
             .put("cpf", cpf)
-            .put("externalId", externalId)
         val json = request(
             method = "POST",
             path = "/v1/open-finance/widget-session",
@@ -66,8 +114,14 @@ class BackendOpenFinanceClient(
             bearer = sessionToken
         ) as JSONObject
         LinkStatus(
+            institution = nullableString(json, "institution"),
             accountsReady = json.optBoolean("accountsReady"),
-            transactionsReady = json.optBoolean("transactionsReady")
+            transactionsReady = json.optBoolean("transactionsReady"),
+            deletionPending = json.optBoolean("deletionPending"),
+            deleted = json.optBoolean("deleted"),
+            accountsError = nullableString(json, "accountsError"),
+            transactionsError = nullableString(json, "transactionsError"),
+            lastWebhookAt = nullableString(json, "lastWebhookAt")
         )
     }
 
@@ -90,29 +144,38 @@ class BackendOpenFinanceClient(
         buildList {
             for (index in 0 until items.length()) {
                 val item = items.optJSONObject(index) ?: continue
-                val providerType = item.optString("type")
-                val type = if (providerType == "INFLOW") TransactionType.INCOME else TransactionType.EXPENSE
+                val type = when (item.optString("type")) {
+                    "INFLOW" -> TransactionType.INCOME
+                    "OUTFLOW" -> TransactionType.EXPENSE
+                    else -> continue
+                }
+                val amount = runCatching { BigDecimal(item.get("amount").toString()) }.getOrNull() ?: continue
+                if (amount.signum() < 0) continue
+                val currency = item.optString("currency").takeIf { it.matches(Regex("^[A-Z]{3}$")) } ?: "BRL"
                 val description = item.optString("description").ifBlank { "Movimentação bancária" }
                 val date = runCatching { LocalDate.parse(item.getString("value_date")) }.getOrNull() ?: continue
-                val institution = item.optJSONObject("institution")
-                val source = institution?.optString("display_name")
-                    ?.takeIf { it.isNotBlank() }
-                    ?: institution?.optString("name")?.takeIf { it.isNotBlank() }
-                    ?: "Open Finance"
+                val source = item.optString("source").takeIf { it.isNotBlank() } ?: "Open Finance"
+                val transactionStatus = when (item.optString("status")) {
+                    "PENDING" -> TransactionStatus.PENDING
+                    "PROCESSED" -> TransactionStatus.PROCESSED
+                    else -> TransactionStatus.UNKNOWN
+                }
 
                 add(
                     FinanceTransaction(
                         id = item.optString("id", "belvo-$index-$date"),
                         description = description,
-                        amount = item.optDouble("amount", 0.0),
+                        amount = amount,
+                        currency = currency,
                         type = type,
                         category = TransactionCategorizer.categorize(description, type),
                         date = date,
-                        source = source
+                        source = source,
+                        status = transactionStatus
                     )
                 )
             }
-        }.sortedByDescending { it.date }
+        }.distinctBy { it.id }.sortedByDescending { it.date }
     }
 
     fun deleteLink(
@@ -128,12 +191,26 @@ class BackendOpenFinanceClient(
         Unit
     }
 
+    override fun close() {
+        if (closed.compareAndSet(false, true)) {
+            executor.shutdownNow()
+            mainHandler.removeCallbacksAndMessages(null)
+        }
+    }
+
+    private fun nullableString(json: JSONObject, key: String): String? =
+        json.optString(key).takeIf { it.isNotBlank() && it != "null" }
+
     private fun encodePath(value: String): String = java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
 
     private fun <T> runAsync(callback: (Result<T>) -> Unit, block: () -> T) {
+        if (closed.get()) {
+            callback(Result.failure(IllegalStateException("Cliente Open Finance encerrado.")))
+            return
+        }
         executor.execute {
             val result = runCatching(block)
-            mainHandler.post { callback(result) }
+            if (!closed.get()) mainHandler.post { if (!closed.get()) callback(result) }
         }
     }
 
@@ -148,6 +225,7 @@ class BackendOpenFinanceClient(
             requestMethod = method
             connectTimeout = 15_000
             readTimeout = 30_000
+            instanceFollowRedirects = false
             setRequestProperty("Accept", "application/json")
             setRequestProperty("Cache-Control", "no-store")
             bearer?.let { setRequestProperty("Authorization", "Bearer $it") }
@@ -158,16 +236,24 @@ class BackendOpenFinanceClient(
             }
         }
 
-        val code = connection.responseCode
-        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-        val text = stream?.bufferedReader()?.use { reader -> reader.readText() }.orEmpty()
-        if (code !in 200..299) {
-            val message = runCatching {
-                (JSONTokener(text).nextValue() as JSONObject).optString("error")
-            }.getOrNull().orEmpty()
-            throw IllegalStateException(message.ifBlank { "Falha HTTP $code" })
+        try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader()?.use { reader -> reader.readText() }.orEmpty()
+            if (code !in 200..299) {
+                val message = runCatching {
+                    (JSONTokener(text).nextValue() as JSONObject).optString("error")
+                }.getOrNull().orEmpty()
+                throw IllegalStateException(message.ifBlank { "Falha HTTP $code" })
+            }
+            if (text.isBlank()) return null
+            return JSONTokener(text).nextValue()
+        } finally {
+            connection.disconnect()
         }
-        if (text.isBlank()) return null
-        return JSONTokener(text).nextValue()
+    }
+
+    private companion object {
+        val UUID_PATTERN = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
     }
 }
