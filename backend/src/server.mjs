@@ -30,7 +30,11 @@ function json(res, status, body, headers = {}) {
     "Content-Length": Buffer.byteLength(payload),
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+    "Cross-Origin-Resource-Policy": "same-origin",
     "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
     ...headers,
   });
   res.end(payload);
@@ -137,6 +141,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         provider: "belvo",
         environment: config.belvoBaseUrl.includes("sandbox") ? "sandbox" : "production",
+        deploymentMode: config.deploymentMode,
       });
     }
 
@@ -173,10 +178,11 @@ const server = http.createServer(async (req, res) => {
       if (!session) return;
       const state = stateStore.get(statusLinkId);
       assertStateOwnership(session, state);
-      if (!state?.deleted) await requireOwnedLink(session, statusLinkId);
+      const link = state?.deleted ? null : await requireOwnedLink(session, statusLinkId);
       const refreshed = stateStore.get(statusLinkId) ?? {};
       return json(res, 200, {
         linkId: statusLinkId,
+        institution: typeof link?.institution === "string" ? link.institution : null,
         accountsReady: Boolean(refreshed.accountsReady),
         transactionsReady: Boolean(refreshed.transactionsReady),
         deletionPending: Boolean(refreshed.deletionPending),
