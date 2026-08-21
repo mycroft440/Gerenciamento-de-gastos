@@ -9,7 +9,7 @@ Revisão iniciada em agosto de 2026 sobre o MVP `Gerenciamento de Gastos`. O pro
 | Segurança / Open Finance | Aprovado para MVP pessoal | vínculo de sessão/link, webhook Bearer, rate limit, timeouts, minimização de dados, exclusão assíncrona e persistência técnica |
 | Backend / API | Aprovado para MVP pessoal | paginação segura, erros de upstream isolados, validação de datas, DTO mínimo e SQLite persistente |
 | Android / persistência | Aprovado para MVP pessoal | `BigDecimal`, vários bancos, filtro mensal, não mistura demo/real, moeda/status e cleanup de cliente/WebView |
-| UX / fluxos | Aprovado para MVP pessoal | linguagem de “Atualizar painel”, sem promessa de tempo real, carga histórica informada, estado de remoção e múltiplas conexões |
+| UX / fluxos | Aprovado para MVP pessoal | linguagem de “Atualizar painel”, identificação das instituições, sem promessa de tempo real, carga histórica informada e remoção segura |
 | Testes / CI | Aprovado | testes Node/JVM, syntax check, lint, Docker, debug e release otimizado |
 | Produção / compliance | Aprovado com gates externos | limitações públicas transformadas em bloqueios explícitos; ver `PRODUCTION_CHECKLIST.md` |
 
@@ -36,7 +36,11 @@ Revisão iniciada em agosto de 2026 sobre o MVP `Gerenciamento de Gastos`. O pro
 19. runtime Node deixava SQLite em estágio experimental;
 20. pipeline utilizava Actions/runtimes obsoletos e instalava ferramentas Android desnecessárias;
 21. documentação antiga ainda descrevia webhook por token na URL e Node 22;
-22. não havia separação formal entre MVP pessoal e distribuição pública.
+22. não havia separação formal entre MVP pessoal e distribuição pública;
+23. `.gitignore` não impedia versionamento acidental de `.env`, SQLite e keystores;
+24. conexões múltiplas eram exibidas apenas por UUID, permitindo remoção do banco errado;
+25. APIs Android deprecated geravam warnings no build do WebView/locale;
+26. build release não era exercitado pelo CI.
 
 ## Decisões deliberadas
 
@@ -51,6 +55,10 @@ O aplicativo mantém transações reais apenas em memória nesta versão. Isso r
 ### Deep link customizado permanece somente no MVP pessoal
 
 O backend valida a propriedade do `link.id`, reduzindo o impacto de callback forjado. Para distribuição pública, App Links HTTPS verificados são gate obrigatório.
+
+### Nome da instituição é persistido, não dados de conta
+
+Para evitar remoção cega por UUID, o app persiste somente um rótulo derivado do identificador institucional da Belvo. Links antigos sem rótulo ficam com o botão Remover desativado até serem identificados pelo backend.
 
 ## Definição de “Crítico satisfeito”
 
