@@ -60,6 +60,10 @@ No modo pessoal, o backend exige um `PERSONAL_SUBJECT` aleatório, sem PII e est
 
 O botão **Atualizar painel** consulta a Belvo pelos links associados a esse `external_id` antes de carregar dados. Assim, uma instalação sem cache local consegue recuperar os `link.id` existentes após autenticação. Alterar o `PERSONAL_SUBJECT` equivale a criar outro perfil técnico e não deve ser usado como rotação comum.
 
+### Builds experimentais anteriores usam outra identidade
+
+Versões anteriores desta PR/MVP geravam o `external_id` no aparelho. Links eventualmente criados por esses builds permanecem associados ao UUID antigo na Belvo. A API documenta a filtragem por `external_id`, mas o fluxo de atualização adotado aqui não documenta uma troca segura desse campo; por isso o Executor não implementou uma reatribuição especulativa. Antes do primeiro uso real, conexões experimentais antigas devem ser removidas/recriadas sob o `PERSONAL_SUBJECT` estável.
+
 ### Autenticação permanece pessoal
 
 `APP_ACCESS_CODE` é aceitável somente para uso pessoal/controlado. O backend rejeita qualquer `DEPLOYMENT_MODE` diferente de `personal`. O Crítico considera isso **não aprovado para multiusuário**, por design, até a autenticação individual ser implementada.
