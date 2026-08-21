@@ -79,6 +79,17 @@ test("recupera links pelo external_id estável", async () => {
   assert.equal(parsed.searchParams.get("page_size"), "100");
 });
 
+test("preserva a representação decimal original de valores monetários", async () => {
+  const payload = '{"count":1,"next":null,"previous":null,"results":[{"id":"tx-big","amount":999999999999999.1234,"local_currency_amount":123456789012345.6789}]}';
+  const fetchImpl = async () => new Response(payload, { status: 200 });
+  const client = new BelvoClient(config, fetchImpl);
+
+  const result = await client.listTransactions("00000000-0000-4000-8000-000000000001");
+
+  assert.equal(result.results[0].amount, "999999999999999.1234");
+  assert.equal(result.results[0].local_currency_amount, "123456789012345.6789");
+});
+
 test("segue paginação de transações e consolida resultados", async () => {
   const seen = [];
   const fetchImpl = async (url) => {
